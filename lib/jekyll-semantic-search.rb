@@ -2,3 +2,4 @@
 
 require "jekyll"
 require_relative "jekyll/semantic_search/version"
+require_relative "jekyll/semantic_search/configuration"
