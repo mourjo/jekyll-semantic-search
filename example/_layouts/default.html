@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page.title | default: site.title }}</title>
+    <style>
+      body { font: 16px/1.5 system-ui, sans-serif; max-width: 42rem; margin: 2rem auto; padding: 0 1rem; }
+      input { width: 100%; padding: .5rem; font-size: 1rem; box-sizing: border-box; }
+      .result { margin: 1rem 0; } .score { color: #666; font-size: .85rem; }
+    </style>
+    {% semantic_search %}
+  </head>
+  <body>
+    <p><a href="{{ '/' | relative_url }}">{{ site.title }}</a></p>
+    {{ content }}
+  </body>
+</html>

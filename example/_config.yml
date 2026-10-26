@@ -1,0 +1,11 @@
+title: Semantic search demo
+description: A tiny Jekyll site showing jekyll-semantic-search.
+
+semantic_search:
+  model: Xenova/all-MiniLM-L6-v2
+  dtype: q8
+
+exclude:
+  - Gemfile
+  - Gemfile.lock
+  - vendor

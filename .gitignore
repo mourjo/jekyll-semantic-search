@@ -1,5 +1,5 @@
 # Ruby / Bundler
-/.bundle/
+.bundle/
 /vendor/bundle/
 /pkg/
 /coverage/

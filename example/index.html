@@ -1,0 +1,47 @@
+---
+layout: default
+---
+<h1>Search the posts</h1>
+<input id="q" type="search" placeholder="Loading search index…" disabled autofocus>
+<p id="status"></p>
+<div id="results"></div>
+
+<h2>All posts</h2>
+<ul>
+  {% for post in site.posts %}<li><a href="{{ post.url | relative_url }}">{{ post.title }}</a></li>{% endfor %}
+</ul>
+
+<script type="module">
+  const input = document.getElementById("q");
+  const status = document.getElementById("status");
+  const results = document.getElementById("results");
+
+  document.addEventListener("semantic-search:progress", ({ detail }) => {
+    if (detail.status === "progress") status.textContent = `Downloading model… ${Math.round(detail.progress)}%`;
+  });
+  document.addEventListener("semantic-search:error", ({ detail }) => {
+    status.textContent = `Search unavailable: ${detail.error.message}`;
+  });
+
+  await window.SemanticSearch.ready;
+  input.disabled = false;
+  input.placeholder = "Try “how do I make bread rise?”";
+  status.textContent = "";
+
+  let timer;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      const hits = await window.SemanticSearch.search(input.value, { limit: 5 });
+      results.replaceChildren(...hits.map((hit) => {
+        const item = document.createElement("div");
+        item.className = "result";
+        const link = Object.assign(document.createElement("a"), { href: hit.url, textContent: hit.title });
+        const score = Object.assign(document.createElement("span"), { className: "score", textContent: ` ${hit.score.toFixed(3)}` });
+        const passage = Object.assign(document.createElement("p"), { textContent: hit.passage });
+        item.append(link, score, passage);
+        return item;
+      }));
+    }, 250);
+  });
+</script>
