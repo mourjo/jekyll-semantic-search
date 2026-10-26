@@ -1,0 +1,8 @@
+title: Fixture
+baseurl: /blog
+plugins:
+  - jekyll-semantic-search
+semantic_search:
+  chunk_size: 12
+  chunk_overlap: 2
+  query_prefix: "query: "
