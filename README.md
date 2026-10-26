@@ -268,3 +268,88 @@ Jekyll::SemanticSearch.embedder_factory = ->(config) { MyEmbedder.new(config.mod
 ## License
 
 MIT
+
+## Installing from GitHub and deploying to GitHub Pages
+
+### Installing from GitHub
+
+Until the gem is published on RubyGems, point Bundler at this repository:
+
+```ruby
+# Gemfile
+group :jekyll_plugins do
+  gem "jekyll-semantic-search", github: "mourjo/jekyll-semantic-search"
+  # or pin a commit or tag for reproducible builds:
+  # gem "jekyll-semantic-search", github: "mourjo/jekyll-semantic-search", ref: "<sha-or-tag>"
+end
+```
+
+Then run `bundle install`, add `{% semantic_search %}` to a layout and
+build as usual. Building requires Ruby 3.3 or newer.
+
+### Deploying to GitHub Pages
+
+GitHub Pages' built-in Jekyll build only runs [an approved list of
+plugins](https://pages.github.com/versions/), so this plugin needs a site built
+with GitHub Actions instead. In the repository's **Settings → Pages**, set
+**Source** to **GitHub Actions**, then add `.github/workflows/pages.yml`:
+
+```yaml
+name: Deploy site
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - id: pages
+        uses: actions/configure-pages@v5
+
+      # Reuse the downloaded model and the embeddings of unchanged posts.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/informers
+            .jekyll-cache/jekyll-semantic-search
+          key: semantic-search-${{ hashFiles('_config.yml') }}-${{ github.sha }}
+          restore-keys: semantic-search-${{ hashFiles('_config.yml') }}-
+
+      - run: bundle exec jekyll build --baseurl "${{ steps.pages.outputs.base_path }}"
+        env:
+          JEKYLL_ENV: production
+      - uses: actions/upload-pages-artifact@v3
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+```
+
+Without the cache step, every deploy downloads the model (about 23 MB for
+the default) and embeds every post again. With it, a deploy only embeds
+posts that changed. Netlify, Cloudflare Pages and other hosts that run
+`bundle exec jekyll build` need no special setup; caching
+`~/.cache/informers` and `.jekyll-cache/` there speeds builds up the same way.
