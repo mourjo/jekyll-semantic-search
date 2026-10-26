@@ -1,0 +1,15 @@
+{
+  "name": "jekyll-semantic-search",
+  "private": true,
+  "type": "module",
+  "description": "Browser runtime tests for jekyll-semantic-search",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/js/*.test.js"
+  },
+  "devDependencies": {
+    "sql.js": "1.14.2"
+  }
+}
