@@ -1,0 +1,24 @@
+# Ruby / Bundler
+/.bundle/
+/vendor/bundle/
+/pkg/
+/coverage/
+/tmp/
+*.gem
+Gemfile.lock
+
+# Jekyll
+_site/
+.jekyll-cache/
+.jekyll-metadata
+.sass-cache/
+
+# Node
+node_modules/
+package-lock.json
+
+# OS / editors
+.DS_Store
+*.swp
+.idea/
+.vscode/
