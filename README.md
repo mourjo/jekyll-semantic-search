@@ -265,10 +265,6 @@ must match what the browser model produces:
 Jekyll::SemanticSearch.embedder_factory = ->(config) { MyEmbedder.new(config.model) }
 ```
 
-## License
-
-MIT
-
 ## Installing from GitHub and deploying to GitHub Pages
 
 ### Installing from GitHub
@@ -353,3 +349,7 @@ the default) and embeds every post again. With it, a deploy only embeds
 posts that changed. Netlify, Cloudflare Pages and other hosts that run
 `bundle exec jekyll build` need no special setup; caching
 `~/.cache/informers` and `.jekyll-cache/` there speeds builds up the same way.
+
+## License
+
+MIT
