@@ -176,12 +176,48 @@ differently. That does not change rankings in practice, and visitors download
 a model about four times smaller (≈23 MB instead of ≈90 MB for MiniLM).
 Browsers cache the model after the first visit.
 
-Examples that work well:
+Models we test (`npm run test:models`): for each one, build-time
+and browser vectors agree (cosine ≥ 0.98) and an obvious match ranks first. Settings not listed
+use the defaults (`dtype: q8`, `pooling: mean`).
 
-| Model                      | dims | Notes                                                         |
-| -------------------------- | ---- | ------------------------------------------------------------- |
-| `Xenova/all-MiniLM-L6-v2`  | 384  | Default. Small and fast, English                              |
-| `Xenova/bge-small-en-v1.5` | 384  | `pooling: cls`; optional query prefix                      |
+| Model                                          | dims | Settings and notes                                                                       |
+| ---------------------------------------------- | ---- | ---------------------------------------------------------------------------------------- |
+| `Xenova/all-MiniLM-L6-v2`                      | 384  | Default. Small and fast, English                                                         |
+| `Xenova/all-MiniLM-L12-v2`                     | 384  | English                                                                                  |
+| `Xenova/all-mpnet-base-v2`                     | 768  | Use `dtype: fp32`: its quantized vectors differ between build and browser (≈0.92)        |
+| `Xenova/paraphrase-multilingual-MiniLM-L12-v2` | 384  | Multilingual                                                                             |
+| `Xenova/bge-small-en-v1.5`                     | 384  | `pooling: cls`; optional query prefix                                                    |
+| `Xenova/bge-base-en-v1.5`                      | 768  | `pooling: cls`; optional query prefix                                                    |
+| `Xenova/gte-small`                             | 384  | English                                                                                  |
+| `Xenova/e5-small-v2`                           | 384  | Prefixes `"passage: "` / `"query: "`                                                     |
+| `Xenova/multilingual-e5-small`                 | 384  | Prefixes `"passage: "` / `"query: "`; multilingual                                       |
+| `nomic-ai/nomic-embed-text-v1.5`               | 768  | Prefixes `"search_document: "` / `"search_query: "`                                      |
+| `Snowflake/snowflake-arctic-embed-xs`          | 384  | `pooling: cls`; query prefix `"Represent this sentence for searching relevant passages: "` |
+| `mixedbread-ai/mxbai-embed-large-v1`           | 1024 | `pooling: cls`; same query prefix as arctic. ≈340 MB download                            |
+| `Xenova/jina-embeddings-v2-small-en`           | 512  | English, long context                                                                    |
+| `onnx-community/embeddinggemma-300m-ONNX`      | 768  | Prefixes `"title: none \| text: "` / `"task: search result \| query: "`. ≈310 MB download |
+
+The table gives document prefixes first, then query prefixes
+(`document_prefix` / `query_prefix`).
+
+Models that do **not** work:
+
+- **Multimodal models**, such as `onnx-community/embeddinggemma-2-ONNX` (text,
+  image, audio and video) or CLIP-style models. Their ONNX graphs need image,
+  audio or video inputs even for text. Transformers.js handles some of them in
+  the browser, but informers cannot, so the build fails (for example with
+  `Invalid rank for input: image_features`). Use a text-only model, such as
+  `embeddinggemma-300m` instead of `embeddinggemma-2`.
+- **Models that pool the last token**, such as the Qwen3 embedding models.
+  Only `mean` and `cls` pooling are supported.
+
+The build reads the model's `last_hidden_state` output and pools it the same
+way the Transformers.js `feature-extraction` pipeline does. Models that also
+export a ready-made `sentence_embedding` (EmbeddingGemma, for example) still
+work, but that output's extra projection layers are not used.
+
+To check another model, add it to `MODELS` in `test/js/models.test.js` and run
+`SEMANTIC_SEARCH_MODELS=<model id> npm run test:models`.
 
 ### Build cache
 
@@ -228,6 +264,7 @@ bundle exec rake test     # Ruby tests (no model download; uses a hashing embedd
 npm install
 npm test                  # browser-runtime tests on Node 20+, incl. an end-to-end
                           # search over an index built by the Ruby side
+npm run test:models       # real models: build vs browser vectors (downloads several GB)
 ```
 
 To try it with a real model:

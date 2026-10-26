@@ -7,9 +7,11 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test test/js/*.test.js"
+    "test": "node --test test/js/*.test.js",
+    "test:models": "SEMANTIC_SEARCH_MODELS=${SEMANTIC_SEARCH_MODELS:-all} node --test --test-concurrency=1 test/js/models.test.js"
   },
   "devDependencies": {
+    "@huggingface/transformers": "4.3.1",
     "sql.js": "1.14.2"
   }
 }
