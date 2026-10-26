@@ -9,16 +9,29 @@ database. On page load the browser downloads that database (via
 [Transformers.js](https://huggingface.co/docs/transformers.js)). Search queries
 are embedded and ranked locally with SQL. No search server or API keys needed.
 
-```
- jekyll build                                   browser
- ─────────────                                  ───────
- posts ─► text ─► passages ─► informers ─┐      fetch index.sqlite3 ─► sql.js
-                                          ▼                               │
-                        assets/semantic-search/index.sqlite3              │
-                          meta: model, dtype, pooling, prefix ───────────►│
-                          documents, chunks(embedding BLOB)               ▼
-                                         query ─► Transformers.js ─► SELECT … ORDER BY
-                                                                    cosine_similarity(…)
+```mermaid
+flowchart TB
+  subgraph build["jekyll build"]
+    P["Rendered posts"] --> T["Plain text"]
+    T --> C["Overlapping passages<br/>(chunk_size / chunk_overlap)"]
+    C --> K{"In embedding<br/>cache?"}
+    K -- yes --> V["Vectors"]
+    K -- no --> I["informers<br/>(ONNX Runtime)"]
+    I --> V
+    I -. stores .-> K
+    V --> DB[("index.sqlite3<br/>meta · documents · chunks")]
+  end
+
+  subgraph browser["Visitor's browser"]
+    S["sql.js"] --> M["Read meta<br/>model · dtype · pooling · query_prefix"]
+    M --> TJ["Transformers.js<br/>(same model)"]
+    Q["Search query"] --> TJ
+    TJ --> R["SELECT … ORDER BY<br/>cosine_similarity(embedding, query)"]
+    S --> R
+    R --> Res["Ranked posts + best passage"]
+  end
+
+  DB -- "fetched on page load" --> S
 ```
 
 ## Installation
@@ -62,6 +75,37 @@ Each post appears at most once, scored by its best-matching passage, and
 | `semantic-search:ready`    | `{ meta }`: the embedding settings read from the index    |
 | `semantic-search:progress` | Transformers.js download progress (`status`, `progress`, …) |
 | `semantic-search:error`    | `{ error }`                                               |
+
+What happens on a page that includes the tag:
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Page
+  participant Runtime as semantic-search.js
+  participant CDN as sql.js / Transformers.js CDN
+  participant Site as Your site
+  participant Hub as Hugging Face Hub
+
+  Page->>Runtime: load module ({% semantic_search %})
+  par
+    Runtime->>CDN: load sql.js (WASM)
+  and
+    Runtime->>Site: fetch index.sqlite3
+  end
+  Runtime->>Runtime: read meta (model, dtype, pooling, query_prefix)
+  Runtime->>CDN: import Transformers.js
+  Runtime->>Hub: download model (browser caches it)
+  Runtime-->>Page: semantic-search:progress events
+  Runtime-->>Page: semantic-search:ready
+  Page->>Runtime: SemanticSearch.search("query")
+  Runtime->>Runtime: embed query_prefix + query
+  Runtime->>Runtime: SQL ranks chunks by cosine_similarity
+  Runtime-->>Page: one result per post, best passage first
+```
+
+With `preload_model: false`, steps 5–7 run on the first search instead of on
+page load.
 
 See [`example/index.html`](example/index.html) for a complete search box.
 
@@ -149,10 +193,28 @@ only embeds passages that changed. Delete the file to start fresh.
 
 ## Database schema
 
-```sql
-meta(key TEXT PRIMARY KEY, value TEXT)          -- JSON-encoded values
-documents(id, url, title, date, excerpt, data)  -- data: JSON (tags, categories)
-chunks(id, document_id, position, content, embedding BLOB)
+```mermaid
+erDiagram
+  documents ||--|{ chunks : "split into"
+  meta {
+    TEXT key PK "model, dtype, pooling, normalize, query_prefix, dimensions, schema_version"
+    TEXT value "JSON-encoded"
+  }
+  documents {
+    INTEGER id PK
+    TEXT url "includes baseurl"
+    TEXT title
+    TEXT date
+    TEXT excerpt
+    TEXT data "JSON: tags, categories"
+  }
+  chunks {
+    INTEGER id PK
+    INTEGER document_id FK
+    INTEGER position
+    TEXT content "NULL when store_content is false"
+    BLOB embedding "float32 little-endian"
+  }
 ```
 
 Embeddings are little-endian float32 blobs, the same layout
