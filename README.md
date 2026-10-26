@@ -10,28 +10,24 @@ database. On page load the browser downloads that database (via
 are embedded and ranked locally with SQL. No search server or API keys needed.
 
 ```mermaid
-flowchart TB
+flowchart LR
   subgraph build["jekyll build"]
-    P["Rendered posts"] --> T["Plain text"]
-    T --> C["Overlapping passages<br/>(chunk_size / chunk_overlap)"]
-    C --> K{"In embedding<br/>cache?"}
-    K -- yes --> V["Vectors"]
-    K -- no --> I["informers<br/>(ONNX Runtime)"]
-    I --> V
+    P["Posts → plain text<br/>→ passages"] --> K{"Cached?"}
+    K -- no --> I["informers<br/>(ONNX)"]
     I -. stores .-> K
-    V --> DB[("index.sqlite3<br/>meta · documents · chunks")]
+    K -- yes --> DB[("index.sqlite3")]
+    I --> DB
   end
 
   subgraph browser["Visitor's browser"]
-    S["sql.js"] --> M["Read meta<br/>model · dtype · pooling · query_prefix"]
-    M --> TJ["Transformers.js<br/>(same model)"]
-    Q["Search query"] --> TJ
-    TJ --> R["SELECT … ORDER BY<br/>cosine_similarity(embedding, query)"]
+    S["sql.js"] -- "meta: model,<br/>dtype, prefix" --> TJ["Transformers.js<br/>(same model)"]
+    Q["Query"] --> TJ
+    TJ --> R["cosine_similarity<br/>in SQL"]
     S --> R
-    R --> Res["Ranked posts + best passage"]
+    R --> Res["Ranked posts"]
   end
 
-  DB -- "fetched on page load" --> S
+  DB -- "fetched on<br/>page load" --> S
 ```
 
 ## Installation
