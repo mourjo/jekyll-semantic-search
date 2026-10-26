@@ -13,7 +13,7 @@ Gem::Specification.new do |spec|
     runtime that embeds queries and searches that database entirely client-side.
   DESC
   spec.license = "MIT"
-  spec.required_ruby_version = ">= 3.1"
+  spec.required_ruby_version = ">= 3.3"
 
   spec.files = Dir["lib/**/*.rb", "assets/**/*", "README.md", "LICENSE"]
   spec.require_paths = ["lib"]

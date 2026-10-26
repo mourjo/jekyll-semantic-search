@@ -1,5 +1,7 @@
 # jekyll-semantic-search
 
+[![Tests](https://github.com/mourjo/jekyll-semantic-search/actions/workflows/test.yml/badge.svg)](https://github.com/mourjo/jekyll-semantic-search/actions/workflows/test.yml)
+
 Semantic search for Jekyll sites that runs entirely in the visitor's browser.
 
 When your site is built, the plugin splits each post into passages, embeds
