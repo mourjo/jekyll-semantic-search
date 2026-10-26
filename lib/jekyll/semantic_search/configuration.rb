@@ -2,8 +2,6 @@
 
 module Jekyll
   module SemanticSearch
-    class ConfigurationError < StandardError; end
-
     # Reads and validates the `semantic_search` section of _config.yml.
     class Configuration
       CONFIG_KEY = "semantic_search"
