@@ -79,6 +79,19 @@ class ConfigurationTest < Minitest::Test
     end
   end
 
+  def test_keyword_weight_defaults_to_off_and_accepts_fractions
+    assert_equal 0, Configuration.new({}).keyword_weight
+    assert_in_delta 0.15, Configuration.new("semantic_search" => { "keyword_weight" => 0.15 }).keyword_weight
+  end
+
+  def test_rejects_invalid_keyword_weight
+    [-0.1, 1.5, "0.2", nil].each do |value|
+      assert_raises(ConfigurationError, value.inspect) do
+        Configuration.new("semantic_search" => { "keyword_weight" => value })
+      end
+    end
+  end
+
   def test_rejects_non_mapping_section
     assert_raises(ConfigurationError) { Configuration.new("semantic_search" => "yes") }
   end

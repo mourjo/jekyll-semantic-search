@@ -8,7 +8,7 @@ module Jekyll
   module SemanticSearch
     # Writes the search database shipped to the browser.
     #
-    #   meta(key, value)                    embedding settings and min_score the browser must reuse
+    #   meta(key, value)                    embedding and search settings the browser must reuse
     #   documents(id, url, title, date, excerpt, data)
     #   chunks(id, document_id, position, content, embedding)
     class IndexWriter
@@ -74,6 +74,7 @@ module Jekyll
           "dimensions" => dimensions,
           "query_prefix" => @config.query_prefix,
           "min_score" => min_score(calibration),
+          "keyword_weight" => @config.keyword_weight,
           "plugin_version" => VERSION
         )
         meta["min_score_calibration"] = calibration.to_h.transform_keys(&:to_s) if calibration

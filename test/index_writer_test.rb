@@ -55,6 +55,11 @@ class IndexWriterTest < Minitest::Test
     refute meta.key?("min_score_calibration")
   end
 
+  def test_writes_keyword_weight
+    assert_equal 0, meta(write)["keyword_weight"]
+    assert_in_delta 0.15, meta(write("keyword_weight" => 0.15))["keyword_weight"]
+  end
+
   def test_writes_numeric_min_score
     assert_in_delta 0.35, meta(write("min_score" => 0.35))["min_score"]
   end

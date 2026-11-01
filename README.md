@@ -60,13 +60,17 @@ await SemanticSearch.ready; // index downloaded and (by default) model loaded
 
 const results = await SemanticSearch.search("how do I make bread rise?", {
   limit: 5,       // default 10
-  minScore: 0.3,  // cosine similarity threshold; defaults to `min_score` (see below)
+  minScore: 0.3,      // score threshold; defaults to `min_score` (see below)
+  keywordWeight: 0.3, // weight of exact word matches; defaults to `keyword_weight`
 });
-// [{ id, url, title, date, excerpt, data: { tags, categories }, passage, score }, …]
+// [{ id, url, title, date, excerpt, data: { tags, categories },
+//    passage, score, semantic, keyword }, …]
 ```
 
 Each post appears at most once, scored by its best-matching passage, and
-`passage` holds that passage's text. Events are dispatched on `document`:
+`passage` holds that passage's text. `score` is `semantic` (the cosine
+similarity) plus `keywordWeight × keyword` (see
+[Exact word matches](#exact-word-matches)). Events are dispatched on `document`:
 
 | Event                      | `detail`                                                  |
 | -------------------------- | --------------------------------------------------------- |
@@ -142,6 +146,10 @@ semantic_search:
   # number in [-1, 1] is used as is, and `auto` calibrates it at build time.
   min_score:
 
+  # Weight in [0, 1] of case-insensitive exact word matches, added to the
+  # cosine similarity. 0 turns keyword matching off.
+  keyword_weight: 0
+
   collections: [posts]   # any collections whose documents should be indexed
   chunk_size: 150        # words per passage; keep within the model's context
   chunk_overlap: 30      # words shared between consecutive passages
@@ -214,6 +222,53 @@ queries scored below it. Keep in mind:
 - Leaving `min_score` unset filters nothing, as in earlier versions.
 - `search()` defaults `minScore` to the value stored in the index, and to −1
   for an index built without one.
+
+### Exact word matches
+
+Embedding models know common language well but often score short queries
+and rare terms (names, jargon, ingredients) low, even when the word is right
+there in a post. Searching the example site for "lactic" or "taper" with
+`min_score: auto` finds nothing, although both words appear in a post.
+`keyword_weight` adds a bonus for case-insensitive, whole-word matches:
+
+```yaml
+semantic_search:
+  min_score: auto
+  keyword_weight: 0.3
+```
+
+For each passage, `keyword` is the share of the query's words found in the
+passage or its post's title, between 0 and 1. Each word counts by how rare it
+is across passages (BM25's idf), so matching "lactic" counts for much more than
+matching "how" or "the". Words are letters and digits in any script, so
+"Rust" matches "rust" but not "trust", and "tomato" does not match "tomatoes".
+A post's score is its best passage's `semantic + keyword_weight × keyword`,
+and `min_score` applies to that total. An exact match can therefore lift a
+post over the threshold. Off-topic queries share no rare words with your
+posts, so they still fall below it.
+
+Example site, `all-MiniLM-L6-v2`, `min_score: auto` (0.283). Each cell shows the posts returned, with their scores:
+
+| Query                              | `keyword_weight: 0` | `0.15`               | `0.3`                                   |
+| ---------------------------------- | ------------------- | -------------------- | --------------------------------------- |
+| dutch oven                         | —                   | sourdough 0.34       | sourdough 0.49                          |
+| lactic                             | —                   | sourdough 0.29       | sourdough 0.44                          |
+| suckers                            | —                   | —                    | tomatoes 0.31                           |
+| taper                              | —                   | —                    | marathon 0.41                           |
+| water                              | —                   | —                    | tomatoes 0.39, sourdough 0.31           |
+| how do I make bread rise?          | sourdough 0.58      | sourdough 0.59       | sourdough 0.61                          |
+| what should I eat before a race?   | marathon 0.37       | marathon 0.42        | marathon 0.46                           |
+| javascript promises, hello, …      | —                   | —                    | —                                       |
+| rust on garden tools               | rust 0.33           | rust 0.36            | rust 0.38                               |
+
+At 0.3, every word that appears in a post finds it, and questions keep the
+same ranking. Unrelated queries still return nothing. The weight also has a cost: a word can
+mean something else ("rust" on garden tools), so an exact match can rank a post
+higher than its meaning deserves. In this example the meaning-based score
+already passed the threshold without the bonus. Keyword scoring runs in the
+browser on the stored passage text, so with `store_content: false` it matches
+titles only. The first keyword search counts word frequencies across the
+index, which takes a moment on very large sites.
 
 To leave a single document out of the index, set this in its front matter:
 
@@ -292,7 +347,7 @@ only embeds passages that changed. Delete the file to start fresh.
 erDiagram
   documents ||--|{ chunks : "split into"
   meta {
-    TEXT key PK "model, dtype, pooling, normalize, query_prefix, min_score, dimensions, schema_version"
+    TEXT key PK "model, dtype, pooling, normalize, query_prefix, min_score, keyword_weight, dimensions, schema_version"
     TEXT value "JSON-encoded"
   }
   documents {
@@ -315,7 +370,8 @@ erDiagram
 Embeddings are little-endian float32 blobs, the same layout
 [sqlite-vec](https://github.com/asg017/sqlite-vec) uses. The browser runtime
 registers a `cosine_similarity(a, b)` SQL function, so you can write your own
-queries against the database.
+queries against the database. It also registers `keyword_score(chunk_id)`, which
+returns the keyword score for the current search's query; outside a keyword search it returns 0.
 
 ## Development
 

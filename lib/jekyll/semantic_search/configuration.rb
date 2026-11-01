@@ -19,6 +19,9 @@ module Jekyll
         # Default search threshold shipped to the browser: nil (no filter), a
         # cosine similarity in [-1, 1], or "auto" to calibrate it at build time.
         "min_score" => nil,
+        # Weight in [0, 1] of case-insensitive exact word matches, added to the
+        # cosine similarity in the browser. 0 disables keyword matching.
+        "keyword_weight" => 0,
         "collections" => ["posts"],
         "chunk_size" => 150,
         "chunk_overlap" => 30,
@@ -98,6 +101,7 @@ module Jekyll
 
         @settings["collections"] = Array(collections).map(&:to_s)
         validate_min_score!
+        validate_keyword_weight!
         validate_positive_integer!("chunk_size")
         validate_positive_integer!("batch_size")
         return if chunk_overlap.is_a?(Integer) && chunk_overlap >= 0 && chunk_overlap < chunk_size
@@ -111,6 +115,12 @@ module Jekyll
         return if value.is_a?(Numeric) && value.between?(-1, 1)
 
         raise ConfigurationError, "`min_score` must be a number in [-1, 1] or \"auto\""
+      end
+
+      def validate_keyword_weight!
+        return if keyword_weight.is_a?(Numeric) && keyword_weight.between?(0, 1)
+
+        raise ConfigurationError, "`keyword_weight` must be a number in [0, 1]"
       end
 
       def validate_positive_integer!(key)
