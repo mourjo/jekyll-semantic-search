@@ -60,7 +60,7 @@ await SemanticSearch.ready; // index downloaded and (by default) model loaded
 
 const results = await SemanticSearch.search("how do I make bread rise?", {
   limit: 5,       // default 10
-  minScore: 0.2,  // cosine similarity threshold, default -1 (no filter)
+  minScore: 0.3,  // cosine similarity threshold; defaults to `min_score` (see below)
 });
 // [{ id, url, title, date, excerpt, data: { tags, categories }, passage, score }, …]
 ```
@@ -138,6 +138,10 @@ semantic_search:
   document_prefix: ""
   query_prefix: ""
 
+  # Default search threshold (cosine similarity): unset means no filter, a
+  # number in [-1, 1] is used as is, and `auto` calibrates it at build time.
+  min_score:
+
   collections: [posts]   # any collections whose documents should be indexed
   chunk_size: 150        # words per passage; keep within the model's context
   chunk_overlap: 30      # words shared between consecutive passages
@@ -153,6 +157,47 @@ semantic_search:
   sql_js_url: https://cdn.jsdelivr.net/npm/sql.js@1.14.2/dist/
   preload_model: true    # false: download the model on the first search
 ```
+
+### Filtering out irrelevant results
+
+Without a threshold, every search returns the `limit` closest posts, even when
+none of them is about the query. `min_score` sets the cosine similarity a post's
+best passage must reach. It is stored in the index and used as the default
+`minScore` in the browser; pass `minScore` to `search()` to override it, or
+`minScore: -1` to see everything.
+
+A good value depends on the model. Unrelated text scores about 0.1 with
+`all-MiniLM-L6-v2`, but about 0.5 with `bge-small-en-v1.5` and 0.75 with
+`gte-small`. Rather than picking a number, you can set:
+
+```yaml
+semantic_search:
+  min_score: auto
+```
+
+The build then:
+
+1. searches the index for about 35 built-in off-topic queries ("how to file
+   taxes", "hello", …) and takes the 90th percentile of their best scores as
+   the noise level. Using a percentile means a few probes that happen to match
+   your blog's topic are ignored;
+2. searches each post's title against its own post and takes the median as the
+   relevance level;
+3. sets `min_score` 15% of the way from the noise level to the relevance level.
+   Titles also appear in every passage, so they score higher than real queries
+   do. That is why the threshold stays close to the noise level.
+
+The build logs the chosen value, and the index's `meta` table stores it along
+with both levels under `min_score_calibration`:
+
+```
+Semantic Search: min_score auto: 0.283 (unrelated queries ≈0.194, post titles ≈0.792)
+```
+
+On the example site this gives 0.28 for MiniLM, 0.60 for bge-small and 0.80 for
+gte-small. In each case, queries about a post scored above the threshold and
+unrelated queries scored below it. Calibration is a heuristic; if it is too
+strict or too loose for your posts, set a number instead.
 
 To leave a single document out of the index, set this in its front matter:
 
@@ -231,7 +276,7 @@ only embeds passages that changed. Delete the file to start fresh.
 erDiagram
   documents ||--|{ chunks : "split into"
   meta {
-    TEXT key PK "model, dtype, pooling, normalize, query_prefix, dimensions, schema_version"
+    TEXT key PK "model, dtype, pooling, normalize, query_prefix, min_score, dimensions, schema_version"
     TEXT value "JSON-encoded"
   }
   documents {

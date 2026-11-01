@@ -74,7 +74,9 @@ export function createSearcher({ db, embed }) {
   }
   registerFunctions(db);
 
-  async function search(query, { limit = 10, minScore = -1 } = {}) {
+  // minScore defaults to the threshold chosen at build time (`min_score` in
+  // _config.yml); pass -1 to see every result.
+  async function search(query, { limit = 10, minScore = meta.min_score ?? -1 } = {}) {
     const text = String(query ?? "").trim();
     if (!text) return [];
 

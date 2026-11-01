@@ -60,6 +60,25 @@ class ConfigurationTest < Minitest::Test
     end
   end
 
+  def test_min_score_defaults_to_no_filter
+    config = Configuration.new({})
+
+    assert_nil config.min_score
+    refute_predicate config, :auto_min_score?
+  end
+
+  def test_accepts_numeric_or_auto_min_score
+    assert_in_delta 0.3, Configuration.new("semantic_search" => { "min_score" => 0.3 }).min_score
+    assert_equal(-1, Configuration.new("semantic_search" => { "min_score" => -1 }).min_score)
+    assert_predicate Configuration.new("semantic_search" => { "min_score" => "auto" }), :auto_min_score?
+  end
+
+  def test_rejects_invalid_min_score
+    [1.5, -2, "high", "0.3", true].each do |value|
+      assert_raises(ConfigurationError, value.inspect) { Configuration.new("semantic_search" => { "min_score" => value }) }
+    end
+  end
+
   def test_rejects_non_mapping_section
     assert_raises(ConfigurationError) { Configuration.new("semantic_search" => "yes") }
   end

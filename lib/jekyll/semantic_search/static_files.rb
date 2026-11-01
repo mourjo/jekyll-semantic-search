@@ -45,7 +45,8 @@ module Jekyll
         cache = EmbeddingCache.new(cache_path, @config.embedding_signature) if @config.cache?
         embedder = BatchEmbedder.new(@embedder_factory.call(@config), batch_size: @config.batch_size, cache: cache)
         entries = Indexer.new(@site, @config, embedder).entries
-        IndexWriter.new(@config).write(destination(dest), entries)
+        calibration = calibrate(entries, embedder)
+        IndexWriter.new(@config).write(destination(dest), entries, calibration: calibration)
 
         Jekyll.logger.info "Semantic Search:", format(
           "Indexed %<docs>d documents (%<chunks>d passages, %<hits>d cached) in %<secs>.1fs",
@@ -58,6 +59,21 @@ module Jekyll
       end
 
       private
+
+      def calibrate(entries, embedder)
+        return nil unless @config.auto_min_score?
+
+        result = MinScoreCalibrator.new(@config, embedder).calibrate(entries)
+        if result
+          Jekyll.logger.info "Semantic Search:", format(
+            "min_score auto: %<min>.3f (unrelated queries ≈%<noise>.3f, post titles ≈%<rel>s)",
+            min: result.min_score, noise: result.noise, rel: result.relevance ? format("%.3f", result.relevance) : "n/a"
+          )
+        else
+          Jekyll.logger.warn "Semantic Search:", "min_score auto: nothing indexed, results will not be filtered"
+        end
+        result
+      end
 
       def cache_path
         @site.in_source_dir(@site.config["cache_dir"] || ".jekyll-cache", "jekyll-semantic-search", "embeddings.sqlite3")

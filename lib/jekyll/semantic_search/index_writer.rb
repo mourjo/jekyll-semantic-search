@@ -8,7 +8,7 @@ module Jekyll
   module SemanticSearch
     # Writes the search database shipped to the browser.
     #
-    #   meta(key, value)                    embedding settings the browser must reuse
+    #   meta(key, value)                    embedding settings and min_score the browser must reuse
     #   documents(id, url, title, date, excerpt, data)
     #   chunks(id, document_id, position, content, embedding)
     class IndexWriter
@@ -39,7 +39,8 @@ module Jekyll
       end
 
       # entries: [{ url:, title:, date:, excerpt:, data:, chunks: [{ content:, vector: }] }]
-      def write(path, entries)
+      # calibration: a MinScoreCalibrator::Result when `min_score: auto`, else nil.
+      def write(path, entries, calibration: nil)
         FileUtils.mkdir_p(File.dirname(path))
         tmp = "#{path}.tmp"
         FileUtils.rm_f(tmp)
@@ -47,7 +48,7 @@ module Jekyll
         db = SQLite3::Database.new(tmp)
         db.execute_batch(SCHEMA)
         db.transaction do
-          write_meta(db, dimensions(entries))
+          write_meta(db, dimensions(entries), calibration)
           entries.each_with_index { |entry, id| write_entry(db, id + 1, entry) }
         end
         db.execute("VACUUM")
@@ -67,16 +68,25 @@ module Jekyll
         sizes.first || 0
       end
 
-      def write_meta(db, dimensions)
+      def write_meta(db, dimensions, calibration)
         meta = @config.embedding_signature.merge(
           "schema_version" => SCHEMA_VERSION,
           "dimensions" => dimensions,
           "query_prefix" => @config.query_prefix,
+          "min_score" => min_score(calibration),
           "plugin_version" => VERSION
         )
+        meta["min_score_calibration"] = calibration.to_h.transform_keys(&:to_s) if calibration
         meta.each do |key, value|
           db.execute("INSERT INTO meta (key, value) VALUES (?, ?)", [key, JSON.generate(value)])
         end
+      end
+
+      # The browser's default search threshold; null means no filter.
+      def min_score(calibration)
+        return calibration&.min_score if @config.auto_min_score?
+
+        @config.min_score
       end
 
       def write_entry(db, id, entry)

@@ -12,14 +12,17 @@ import { createSearcher } from "../../assets/semantic-search/search-core.js";
 import { DIMENSIONS, hashingVector } from "./support/hashing-embedder.js";
 
 let searcher;
+let databaseBytes;
+let SQL;
 const embedded = [];
 
 before(async () => {
   const output = join(mkdtempSync(join(tmpdir(), "semantic-search-")), "index.sqlite3");
   execFileSync("bundle", ["exec", "ruby", "-Ilib", "-Itest", "test/support/build_index.rb", output], { stdio: "inherit" });
 
-  const SQL = await initSqlJs();
-  const db = new SQL.Database(readFileSync(output));
+  SQL = await initSqlJs();
+  databaseBytes = readFileSync(output);
+  const db = new SQL.Database(databaseBytes);
   searcher = createSearcher({
     db,
     embed: async (text) => {
@@ -33,6 +36,7 @@ test("exposes the metadata written at build time", () => {
   assert.equal(searcher.meta.model, "Xenova/all-MiniLM-L6-v2");
   assert.equal(searcher.meta.dimensions, DIMENSIONS);
   assert.equal(searcher.meta.query_prefix, "query: ");
+  assert.equal(searcher.meta.min_score, null);
 });
 
 test("ranks the most similar post first and returns its best passage", async () => {
@@ -68,4 +72,16 @@ test("blank queries return nothing without embedding", async () => {
   const before = embedded.length;
   assert.deepEqual(await searcher.search("   "), []);
   assert.equal(embedded.length, before);
+});
+
+test("defaults minScore to the threshold stored in the index", async () => {
+  const [first, second] = await searcher.search("tomatoes");
+  const threshold = (first.score + second.score) / 2;
+  const db = new SQL.Database(databaseBytes);
+  db.run("UPDATE meta SET value = ? WHERE key = 'min_score'", [JSON.stringify(threshold)]);
+  const strict = createSearcher({ db, embed: async (text) => hashingVector(text) });
+
+  assert.equal(strict.meta.min_score, threshold);
+  assert.deepEqual((await strict.search("tomatoes")).map((r) => r.url), ["/garden/"]);
+  assert.equal((await strict.search("tomatoes", { minScore: -1 })).length, 3);
 });

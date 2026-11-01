@@ -25,9 +25,13 @@ class IndexWriterTest < Minitest::Test
     ]
   end
 
-  def write(settings = {})
-    IndexWriter.new(Configuration.new("semantic_search" => settings)).write(@path, entries)
+  def write(settings = {}, calibration = nil)
+    IndexWriter.new(Configuration.new("semantic_search" => settings)).write(@path, entries, calibration: calibration)
     SQLite3::Database.new(@path)
+  end
+
+  def meta(db)
+    db.execute("SELECT key, value FROM meta").to_h { |k, v| [k, JSON.parse(v)] }
   end
 
   def test_writes_meta_for_the_browser
@@ -41,6 +45,30 @@ class IndexWriterTest < Minitest::Test
     assert_equal "query: ", meta["query_prefix"]
     assert_equal 2, meta["dimensions"]
     assert_equal IndexWriter::SCHEMA_VERSION, meta["schema_version"]
+  end
+
+  def test_min_score_is_null_by_default
+    meta = meta(write)
+
+    assert meta.key?("min_score")
+    assert_nil meta["min_score"]
+    refute meta.key?("min_score_calibration")
+  end
+
+  def test_writes_numeric_min_score
+    assert_in_delta 0.35, meta(write("min_score" => 0.35))["min_score"]
+  end
+
+  def test_writes_calibrated_min_score
+    calibration = Jekyll::SemanticSearch::MinScoreCalibrator::Result.new(min_score: 0.29, noise: 0.2, relevance: 0.8)
+    meta = meta(write({ "min_score" => "auto" }, calibration))
+
+    assert_in_delta 0.29, meta["min_score"]
+    assert_equal({ "min_score" => 0.29, "noise" => 0.2, "relevance" => 0.8 }, meta["min_score_calibration"])
+  end
+
+  def test_auto_without_calibration_writes_null
+    assert_nil meta(write("min_score" => "auto"))["min_score"]
   end
 
   def test_writes_documents_and_chunks

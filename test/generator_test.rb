@@ -77,6 +77,17 @@ class GeneratorTest < Minitest::Test
     assert_equal HashingEmbedder::DIMENSIONS.to_s, meta["dimensions"]
   end
 
+  def test_auto_min_score_is_calibrated_at_build_time
+    build("semantic_search" => { "chunk_size" => 12, "chunk_overlap" => 2, "query_prefix" => "query: ", "min_score" => "auto" })
+    meta = database.execute("SELECT key, value FROM meta").to_h { |k, v| [k, JSON.parse(v)] }
+    calibration = meta.fetch("min_score_calibration")
+
+    assert_equal calibration["min_score"], meta["min_score"]
+    assert_operator meta["min_score"], :>, calibration["noise"]
+    assert_operator meta["min_score"], :<, calibration["relevance"]
+    assert_includes @embedder.calls.flatten, "query: Ownership in Rust"
+  end
+
   def test_rebuild_reuses_cached_embeddings
     build
     @embedder = HashingEmbedder.new

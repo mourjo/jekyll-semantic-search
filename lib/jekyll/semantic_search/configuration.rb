@@ -16,6 +16,9 @@ module Jekyll
         "normalize" => true,
         "document_prefix" => "",
         "query_prefix" => "",
+        # Default search threshold shipped to the browser: nil (no filter), a
+        # cosine similarity in [-1, 1], or "auto" to calibrate it at build time.
+        "min_score" => nil,
         "collections" => ["posts"],
         "chunk_size" => 150,
         "chunk_overlap" => 30,
@@ -58,6 +61,10 @@ module Jekyll
         store_content != false
       end
 
+      def auto_min_score?
+        min_score == "auto"
+      end
+
       def cache?
         cache != false
       end
@@ -90,11 +97,20 @@ module Jekyll
         raise ConfigurationError, "`pooling` must be one of #{POOLINGS.join(", ")}" unless POOLINGS.include?(pooling)
 
         @settings["collections"] = Array(collections).map(&:to_s)
+        validate_min_score!
         validate_positive_integer!("chunk_size")
         validate_positive_integer!("batch_size")
         return if chunk_overlap.is_a?(Integer) && chunk_overlap >= 0 && chunk_overlap < chunk_size
 
         raise ConfigurationError, "`chunk_overlap` must be an integer in [0, chunk_size)"
+      end
+
+      def validate_min_score!
+        value = min_score
+        return if value.nil? || value == "auto"
+        return if value.is_a?(Numeric) && value.between?(-1, 1)
+
+        raise ConfigurationError, "`min_score` must be a number in [-1, 1] or \"auto\""
       end
 
       def validate_positive_integer!(key)
