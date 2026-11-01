@@ -15,39 +15,25 @@ embedded and ranked locally. No search server or API keys needed.
 
 ## Architecture
 
+**At build time**, Ruby turns every indexed document into passages and embeds
+each one, reusing cached embeddings for passages that did not change. It then
+calibrates the model: it measures how high unrelated queries score (noise) and
+how high a post's title scores against the post (relevance). Everything the
+browser needs goes into one SQLite file: the vectors, the passage text, the
+model settings, those two levels and your search settings.
+
 ```mermaid
 flowchart LR
-  subgraph build["jekyll build (Ruby)"]
-    D["Posts, collections<br/>(rendered HTML)"] --> C["Passages<br/>chunk_size,<br/>chunk_overlap"]
-    C --> E["Embed<br/>title + passage<br/>(informers)"]
-    E <--> EC[("Embedding<br/>cache")]
-    E --> CAL["Calibrate<br/>noise, relevance,<br/>min_score"]
-  end
-
-  E --> DB[("index.sqlite3<br/>vectors, text,<br/>settings")]
-  CAL --> DB
-
-  subgraph browser["Visitor's browser (JavaScript)"]
-    Q["Query"] --> QE["Embed query<br/>(Transformers.js,<br/>same model)"]
-    QE --> SEM["Cosine similarity<br/>per passage,<br/>rescaled 0 – 1+"]
-    Q --> KW["BM25 per passage<br/>stems, accents, typos,<br/>normalised 0 – 1"]
-    SEM --> F{"cosine ≥ min_score<br/>or keyword ≥<br/>keyword min_score"}
-    KW --> F
-    F --> R["Rank by<br/>(1 − w) · semantic<br/>+ w · keyword,<br/>best passage per post"]
-  end
-
-  DB --> SEM
-  DB --> KW
+  A["Posts"] --> B["Passages"]
+  B --> C["Embeddings"]
+  C <--> K[("Cache")]
+  C --> D["Calibration"]
+  C --> I[("index.sqlite3")]
+  D --> I
 ```
 
-At build time, Ruby turns every indexed document into passages and embeds
-each one. It then measures two reference scores for the chosen model: how high
-unrelated queries score (noise) and how high a post's title scores against the
-post (relevance). Everything the browser needs goes into one SQLite file: the
-vectors, the passage text, the model settings, those two levels and your search
-settings.
-
-In the browser, every search runs two scorers over every passage:
+**In the browser**, the page downloads `index.sqlite3` and the same model,
+and every search scores every passage twice:
 
 - **Semantic:** the cosine similarity between the query's embedding and the
   passage's. It finds posts about the same thing in different words.
@@ -55,10 +41,20 @@ In the browser, every search runs two scorers over every passage:
   finds posts that contain the query's words, including inflected forms
   ("tomato" → "tomatoes") and typos ("Lauterbrunen" → "Lauterbrunnen").
 
-A passage is returned if either scorer is confident about it. Results are
-ranked by a weighted mix of both scores, each normalised to a comparable 0–1
-scale. Each post appears once, represented by its best passage. See
-[Keyword search](#keyword-search) for the details.
+```mermaid
+flowchart TB
+  Q["Query"] --> E["Embed query"]
+  Q --> B["BM25 keyword score"]
+  E --> S["Semantic score"]
+  S --> F["Keep passages where either<br/>score passes its threshold"]
+  B --> F
+  F --> R["Rank by weighted<br/>sum of both scores"]
+  R --> O["One result per post"]
+```
+
+Both scores are normalised to a comparable 0–1 scale, and each post is
+represented by its best passage. See [Keyword search](#keyword-search) for the
+details.
 
 ## Installation
 
