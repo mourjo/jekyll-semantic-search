@@ -194,10 +194,26 @@ with both levels under `min_score_calibration`:
 Semantic Search: min_score auto: 0.283 (unrelated queries ≈0.194, post titles ≈0.792)
 ```
 
-On the example site this gives 0.28 for MiniLM, 0.60 for bge-small and 0.80 for
-gte-small. In each case, queries about a post scored above the threshold and
-unrelated queries scored below it. Calibration is a heuristic; if it is too
-strict or too loose for your posts, set a number instead.
+Results on the [example site](example/), with a handful of hand-written queries
+about its posts ("how do I make bread rise?", "borrow checker in Rust", …) and
+unrelated ones ("javascript promises", "medieval history of France", "hello", …):
+
+| Model               | `auto` threshold | Relevant queries scored | Unrelated queries scored |
+| ------------------- | ---------------- | ----------------------- | ------------------------ |
+| `all-MiniLM-L6-v2`  | 0.28             | ≥ 0.37                  | ≤ 0.17                   |
+| `bge-small-en-v1.5` | 0.60             | ≥ 0.61                  | ≤ 0.59                   |
+| `gte-small`         | 0.80             | ≥ 0.84                  | ≤ 0.80                   |
+
+In each case, queries about a post scored above the threshold and unrelated
+queries scored below it. Keep in mind:
+
+- The 15% margin was tuned on the example site's four posts, so calibration is
+  a heuristic. With bge and gte the threshold is only about 0.01–0.04 from
+  both relevant and unrelated scores. If it turns out too strict or too loose
+  for your posts, set a number instead.
+- Leaving `min_score` unset filters nothing, as in earlier versions.
+- `search()` defaults `minScore` to the value stored in the index, and to −1
+  for an index built without one.
 
 To leave a single document out of the index, set this in its front matter:
 
