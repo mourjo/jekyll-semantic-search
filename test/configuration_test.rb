@@ -79,17 +79,54 @@ class ConfigurationTest < Minitest::Test
     end
   end
 
-  def test_keyword_weight_defaults_to_off_and_accepts_fractions
-    assert_equal 0, Configuration.new({}).keyword_weight
-    assert_in_delta 0.15, Configuration.new("semantic_search" => { "keyword_weight" => 0.15 }).keyword_weight
+  def keyword(value)
+    Configuration.new("semantic_search" => { "keyword_search" => value })
   end
 
-  def test_rejects_invalid_keyword_weight
-    [-0.1, 1.5, "0.2", nil].each do |value|
-      assert_raises(ConfigurationError, value.inspect) do
-        Configuration.new("semantic_search" => { "keyword_weight" => value })
-      end
+  def test_keyword_search_is_off_by_default
+    config = Configuration.new({})
+
+    refute_predicate config, :keyword_search?
+    refute_predicate config, :calibrate?
+    assert_equal Configuration::KEYWORD_DEFAULTS, config.keyword_search
+  end
+
+  def test_keyword_search_true_uses_defaults
+    config = keyword(true)
+
+    assert_predicate config, :keyword_search?
+    assert_predicate config, :calibrate?
+    assert_equal Configuration::KEYWORD_DEFAULTS.merge("enabled" => true), config.keyword_search
+  end
+
+  def test_keyword_search_mapping_enables_and_overrides
+    settings = keyword("weight" => 0.5, "min_score" => 0.6, :typo_tolerance => false).keyword_search
+
+    assert settings["enabled"]
+    assert_in_delta 0.5, settings["weight"]
+    assert_in_delta 0.6, settings["min_score"]
+    refute settings["typo_tolerance"]
+    assert_in_delta 1.2, settings["k1"]
+  end
+
+  def test_keyword_search_mapping_can_stay_disabled
+    refute_predicate keyword("enabled" => false, "weight" => 0.5), :keyword_search?
+    refute_predicate keyword(nil), :keyword_search?
+  end
+
+  def test_rejects_invalid_keyword_search
+    [
+      "yes", { "weight" => 1.5 }, { "weight" => "0.2" }, { "min_score" => -0.1 }, { "min_score" => nil }, { "b" => 2 },
+      { "k1" => 0 }, { "stemming" => "yes" }, { "enabled" => nil }, { "fuzzy" => true }
+    ].each do |value|
+      assert_raises(ConfigurationError, value.inspect) { keyword(value) }
     end
+  end
+
+  def test_old_keyword_weight_points_to_keyword_search
+    error = assert_raises(ConfigurationError) { Configuration.new("semantic_search" => { "keyword_weight" => 0.3 }) }
+
+    assert_match(/keyword_search/, error.message)
   end
 
   def test_rejects_non_mapping_section

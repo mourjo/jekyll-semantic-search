@@ -61,16 +61,16 @@ module Jekyll
       private
 
       def calibrate(entries, embedder)
-        return nil unless @config.auto_min_score?
+        return nil unless @config.calibrate?
 
         result = MinScoreCalibrator.new(@config, embedder).calibrate(entries)
         if result
-          Jekyll.logger.info "Semantic Search:", format(
-            "min_score auto: %<min>.3f (unrelated queries ≈%<noise>.3f, post titles ≈%<rel>s)",
-            min: result.min_score, noise: result.noise, rel: result.relevance ? format("%.3f", result.relevance) : "n/a"
-          )
+          levels = format("unrelated queries ≈%<noise>.3f, post titles ≈%<rel>s",
+                          noise: result.noise, rel: result.relevance ? format("%.3f", result.relevance) : "n/a")
+          message = @config.auto_min_score? ? format("min_score auto: %.3f (%s)", result.min_score, levels) : "Calibrated: #{levels}"
+          Jekyll.logger.info "Semantic Search:", message
         else
-          Jekyll.logger.warn "Semantic Search:", "min_score auto: nothing indexed, results will not be filtered"
+          Jekyll.logger.warn "Semantic Search:", "Nothing indexed to calibrate scores on"
         end
         result
       end

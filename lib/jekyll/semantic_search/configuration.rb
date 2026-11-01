@@ -19,9 +19,9 @@ module Jekyll
         # Default search threshold shipped to the browser: nil (no filter), a
         # cosine similarity in [-1, 1], or "auto" to calibrate it at build time.
         "min_score" => nil,
-        # Weight in [0, 1] of case-insensitive exact word matches, added to the
-        # cosine similarity in the browser. 0 disables keyword matching.
-        "keyword_weight" => 0,
+        # BM25 keyword search run in the browser next to the embeddings; `true`,
+        # `false` or a mapping of KEYWORD_DEFAULTS keys.
+        "keyword_search" => false,
         "collections" => ["posts"],
         "chunk_size" => 150,
         "chunk_overlap" => 30,
@@ -35,6 +35,17 @@ module Jekyll
         "preload_model" => true
       }.freeze
 
+      # Mirrors KEYWORD_DEFAULTS in assets/semantic-search/keyword-search.js.
+      KEYWORD_DEFAULTS = {
+        "enabled" => false,
+        "weight" => 0.3,
+        "min_score" => 0.5,
+        "stemming" => true,
+        "typo_tolerance" => true,
+        "k1" => 1.2,
+        "b" => 0.75
+      }.freeze
+
       DTYPES = %w[fp32 fp16 q8 int8 uint8 q4 q4f16 bnb4].freeze
       POOLINGS = %w[mean cls].freeze
 
@@ -44,7 +55,13 @@ module Jekyll
         user = site_config.fetch(CONFIG_KEY, nil) || {}
         raise ConfigurationError, "`#{CONFIG_KEY}` must be a mapping" unless user.is_a?(Hash)
 
-        @settings = DEFAULTS.merge(user.transform_keys(&:to_s))
+        user = user.transform_keys(&:to_s)
+        if user.key?("keyword_weight")
+          raise ConfigurationError, "`keyword_weight` was replaced by `keyword_search: { enabled: true, weight: … }`"
+        end
+
+        @settings = DEFAULTS.merge(user)
+        @settings["keyword_search"] = keyword_settings(@settings["keyword_search"])
         validate!
       end
 
@@ -66,6 +83,16 @@ module Jekyll
 
       def auto_min_score?
         min_score == "auto"
+      end
+
+      def keyword_search?
+        keyword_search["enabled"]
+      end
+
+      # Semantic scores need calibrating for `min_score: auto` and to be put on
+      # the keyword score's scale.
+      def calibrate?
+        auto_min_score? || keyword_search?
       end
 
       def cache?
@@ -101,7 +128,7 @@ module Jekyll
 
         @settings["collections"] = Array(collections).map(&:to_s)
         validate_min_score!
-        validate_keyword_weight!
+        validate_keyword_search!
         validate_positive_integer!("chunk_size")
         validate_positive_integer!("batch_size")
         return if chunk_overlap.is_a?(Integer) && chunk_overlap >= 0 && chunk_overlap < chunk_size
@@ -117,10 +144,39 @@ module Jekyll
         raise ConfigurationError, "`min_score` must be a number in [-1, 1] or \"auto\""
       end
 
-      def validate_keyword_weight!
-        return if keyword_weight.is_a?(Numeric) && keyword_weight.between?(0, 1)
+      def keyword_settings(value)
+        case value
+        when nil then KEYWORD_DEFAULTS.dup
+        when true, false then KEYWORD_DEFAULTS.merge("enabled" => value)
+        when Hash
+          given = value.transform_keys(&:to_s)
+          unknown = given.keys - KEYWORD_DEFAULTS.keys
+          raise ConfigurationError, "Unknown `keyword_search` keys: #{unknown.join(", ")}" if unknown.any?
 
-        raise ConfigurationError, "`keyword_weight` must be a number in [0, 1]"
+          # A mapping turns keyword search on unless it says `enabled: false`.
+          KEYWORD_DEFAULTS.merge("enabled" => true).merge(given)
+        else
+          raise ConfigurationError, "`keyword_search` must be true, false or a mapping"
+        end
+      end
+
+      def validate_keyword_search!
+        settings = keyword_search
+        %w[enabled stemming typo_tolerance].each do |key|
+          raise ConfigurationError, "`keyword_search.#{key}` must be true or false" unless [true, false].include?(settings[key])
+        end
+        validate_fraction!("weight", settings["weight"])
+        validate_fraction!("min_score", settings["min_score"])
+        validate_fraction!("b", settings["b"])
+        return if settings["k1"].is_a?(Numeric) && settings["k1"].positive?
+
+        raise ConfigurationError, "`keyword_search.k1` must be a positive number"
+      end
+
+      def validate_fraction!(key, value)
+        return if value.is_a?(Numeric) && value.between?(0, 1)
+
+        raise ConfigurationError, "`keyword_search.#{key}` must be a number in [0, 1]"
       end
 
       def validate_positive_integer!(key)

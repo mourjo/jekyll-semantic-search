@@ -2,7 +2,7 @@
 
 module Jekyll
   module SemanticSearch
-    RUNTIME_FILES = %w[semantic-search.js search-core.js].freeze
+    RUNTIME_FILES = %w[semantic-search.js search-core.js keyword-search.js].freeze
 
     class << self
       # Builds the embedder used at build time. Override to plug in another

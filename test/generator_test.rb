@@ -34,7 +34,7 @@ class GeneratorTest < Minitest::Test
   def test_writes_database_and_runtime
     build
 
-    %w[index.sqlite3 semantic-search.js search-core.js].each do |file|
+    %w[index.sqlite3 semantic-search.js search-core.js keyword-search.js].each do |file|
       assert_path_exists File.join(@tmp, "_site/assets/semantic-search", file)
     end
   end
@@ -80,12 +80,22 @@ class GeneratorTest < Minitest::Test
   def test_auto_min_score_is_calibrated_at_build_time
     build("semantic_search" => { "chunk_size" => 12, "chunk_overlap" => 2, "query_prefix" => "query: ", "min_score" => "auto" })
     meta = database.execute("SELECT key, value FROM meta").to_h { |k, v| [k, JSON.parse(v)] }
-    calibration = meta.fetch("min_score_calibration")
+    calibration = meta.fetch("calibration")
 
-    assert_equal calibration["min_score"], meta["min_score"]
     assert_operator meta["min_score"], :>, calibration["noise"]
     assert_operator meta["min_score"], :<, calibration["relevance"]
     assert_includes @embedder.calls.flatten, "query: Ownership in Rust"
+  end
+
+  def test_keyword_search_calibrates_and_ships_its_settings
+    build("semantic_search" => { "chunk_size" => 12, "chunk_overlap" => 2, "keyword_search" => { "weight" => 0.4 } })
+    meta = database.execute("SELECT key, value FROM meta").to_h { |k, v| [k, JSON.parse(v)] }
+
+    assert_nil meta["min_score"]
+    assert meta["keyword_search"]["enabled"]
+    assert_in_delta 0.4, meta["keyword_search"]["weight"]
+    assert_operator meta.fetch("calibration")["relevance"], :>, meta["calibration"]["noise"]
+    assert_path_exists File.join(@tmp, "_site/assets/semantic-search/keyword-search.js")
   end
 
   def test_rebuild_reuses_cached_embeddings

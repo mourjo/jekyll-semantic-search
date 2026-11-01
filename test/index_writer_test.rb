@@ -52,12 +52,15 @@ class IndexWriterTest < Minitest::Test
 
     assert meta.key?("min_score")
     assert_nil meta["min_score"]
-    refute meta.key?("min_score_calibration")
+    refute meta.key?("calibration")
   end
 
-  def test_writes_keyword_weight
-    assert_equal 0, meta(write)["keyword_weight"]
-    assert_in_delta 0.15, meta(write("keyword_weight" => 0.15))["keyword_weight"]
+  def test_writes_keyword_search_settings
+    assert_equal Configuration::KEYWORD_DEFAULTS, meta(write)["keyword_search"]
+    settings = meta(write("keyword_search" => { "weight" => 0.4 }))["keyword_search"]
+
+    assert settings["enabled"]
+    assert_in_delta 0.4, settings["weight"]
   end
 
   def test_writes_numeric_min_score
@@ -69,7 +72,15 @@ class IndexWriterTest < Minitest::Test
     meta = meta(write({ "min_score" => "auto" }, calibration))
 
     assert_in_delta 0.29, meta["min_score"]
-    assert_equal({ "min_score" => 0.29, "noise" => 0.2, "relevance" => 0.8 }, meta["min_score_calibration"])
+    assert_equal({ "noise" => 0.2, "relevance" => 0.8 }, meta["calibration"])
+  end
+
+  def test_keyword_search_keeps_a_numeric_min_score_and_stores_calibration
+    calibration = Jekyll::SemanticSearch::MinScoreCalibrator::Result.new(min_score: 0.29, noise: 0.2, relevance: 0.8)
+    meta = meta(write({ "min_score" => 0.4, "keyword_search" => true }, calibration))
+
+    assert_in_delta 0.4, meta["min_score"]
+    assert_equal({ "noise" => 0.2, "relevance" => 0.8 }, meta["calibration"])
   end
 
   def test_auto_without_calibration_writes_null

@@ -39,7 +39,7 @@ module Jekyll
       end
 
       # entries: [{ url:, title:, date:, excerpt:, data:, chunks: [{ content:, vector: }] }]
-      # calibration: a MinScoreCalibrator::Result when `min_score: auto`, else nil.
+      # calibration: a MinScoreCalibrator::Result when Configuration#calibrate?, else nil.
       def write(path, entries, calibration: nil)
         FileUtils.mkdir_p(File.dirname(path))
         tmp = "#{path}.tmp"
@@ -74,10 +74,10 @@ module Jekyll
           "dimensions" => dimensions,
           "query_prefix" => @config.query_prefix,
           "min_score" => min_score(calibration),
-          "keyword_weight" => @config.keyword_weight,
+          "keyword_search" => @config.keyword_search,
           "plugin_version" => VERSION
         )
-        meta["min_score_calibration"] = calibration.to_h.transform_keys(&:to_s) if calibration
+        meta["calibration"] = { "noise" => calibration.noise, "relevance" => calibration.relevance } if calibration
         meta.each do |key, value|
           db.execute("INSERT INTO meta (key, value) VALUES (?, ?)", [key, JSON.generate(value)])
         end

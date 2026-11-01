@@ -2,35 +2,63 @@
 
 [![Tests](https://github.com/mourjo/jekyll-semantic-search/actions/workflows/test.yml/badge.svg)](https://github.com/mourjo/jekyll-semantic-search/actions/workflows/test.yml)
 
-Semantic search for Jekyll sites that runs entirely in the visitor's browser.
+Semantic search for Jekyll sites that runs entirely in the visitor's browser,
+with optional BM25 keyword search to catch the exact and near word matches
+embeddings miss.
 
 When your site is built, the plugin splits each post into passages, embeds
 them with an ONNX model of your choice and stores the vectors in a SQLite
 database. On page load the browser downloads that database (via
 [sql.js](https://github.com/sql-js/sql.js)) and the same model (via
-[Transformers.js](https://huggingface.co/docs/transformers.js)). Search queries
-are embedded and ranked locally with SQL. No search server or API keys needed.
+[Transformers.js](https://huggingface.co/docs/transformers.js)). Queries are
+embedded and ranked locally. No search server or API keys needed.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-  subgraph build["jekyll build"]
-    P["Posts → plain text<br/>→ passages"] --> K{"Cached?"}
-    K -- no --> I["informers<br/>(ONNX)"]
-    I -. stores .-> K
-    K -- yes --> DB[("index.sqlite3")]
-    I --> DB
+  subgraph build["jekyll build (Ruby)"]
+    D["Posts, collections<br/>(rendered HTML)"] --> C["Passages<br/>chunk_size,<br/>chunk_overlap"]
+    C --> E["Embed<br/>title + passage<br/>(informers)"]
+    E <--> EC[("Embedding<br/>cache")]
+    E --> CAL["Calibrate<br/>noise, relevance,<br/>min_score"]
   end
 
-  subgraph browser["Visitor's browser"]
-    S["sql.js"] -- "meta: model,<br/>dtype, prefix" --> TJ["Transformers.js<br/>(same model)"]
-    Q["Query"] --> TJ
-    TJ --> R["cosine_similarity<br/>in SQL"]
-    S --> R
-    R --> Res["Ranked posts"]
+  E --> DB[("index.sqlite3<br/>vectors, text,<br/>settings")]
+  CAL --> DB
+
+  subgraph browser["Visitor's browser (JavaScript)"]
+    Q["Query"] --> QE["Embed query<br/>(Transformers.js,<br/>same model)"]
+    QE --> SEM["Cosine similarity<br/>per passage,<br/>rescaled 0 – 1+"]
+    Q --> KW["BM25 per passage<br/>stems, accents, typos,<br/>normalised 0 – 1"]
+    SEM --> F{"cosine ≥ min_score<br/>or keyword ≥<br/>keyword min_score"}
+    KW --> F
+    F --> R["Rank by<br/>(1 − w) · semantic<br/>+ w · keyword,<br/>best passage per post"]
   end
 
-  DB -- "fetched on<br/>page load" --> S
+  DB --> SEM
+  DB --> KW
 ```
+
+At build time, Ruby turns every indexed document into passages and embeds
+each one. It then measures two reference scores for the chosen model: how high
+unrelated queries score (noise) and how high a post's title scores against the
+post (relevance). Everything the browser needs goes into one SQLite file: the
+vectors, the passage text, the model settings, those two levels and your search
+settings.
+
+In the browser, every search runs two scorers over every passage:
+
+- **Semantic:** the cosine similarity between the query's embedding and the
+  passage's. It finds posts about the same thing in different words.
+- **Keyword** (when `keyword_search` is on): BM25 over the passage text. It
+  finds posts that contain the query's words, including inflected forms
+  ("tomato" → "tomatoes") and typos ("Lauterbrunen" → "Lauterbrunnen").
+
+A passage is returned if either scorer is confident about it. Results are
+ranked by a weighted mix of both scores, each normalised to a comparable 0–1
+scale. Each post appears once, represented by its best passage. See
+[Keyword search](#keyword-search) for the details.
 
 ## Installation
 
@@ -59,24 +87,43 @@ module downloads the index when the page loads and defines
 await SemanticSearch.ready; // index downloaded and (by default) model loaded
 
 const results = await SemanticSearch.search("how do I make bread rise?", {
-  limit: 5,       // default 10
-  minScore: 0.3,      // score threshold; defaults to `min_score` (see below)
-  keywordWeight: 0.3, // weight of exact word matches; defaults to `keyword_weight`
+  limit: 5,                      // default 10
+  minScore: 0.3,                 // default: min_score from _config.yml
+  keyword: { weight: 0.5 },      // defaults: keyword_search from _config.yml
 });
-// [{ id, url, title, date, excerpt, data: { tags, categories },
-//    passage, score, semantic, keyword }, …]
 ```
 
-Each post appears at most once, scored by its best-matching passage, and
-`passage` holds that passage's text. `score` is `semantic` (the cosine
-similarity) plus `keywordWeight × keyword` (see
-[Exact word matches](#exact-word-matches)). Events are dispatched on `document`:
+Every option is optional. Without one, the value from `_config.yml` (stored in
+the index) applies:
 
-| Event                      | `detail`                                                  |
-| -------------------------- | --------------------------------------------------------- |
-| `semantic-search:ready`    | `{ meta }`: the embedding settings read from the index    |
+| Option                  | Default                         | Meaning                                                                 |
+| ----------------------- | ------------------------------- | ----------------------------------------------------------------------- |
+| `limit`                 | `10`                            | Most posts to return                                                    |
+| `minScore`              | `min_score`, or −1 if unset     | Cosine similarity a passage needs to be returned. −1 returns everything |
+| `keyword.enabled`       | `keyword_search.enabled`        | Run keyword search for this query                                       |
+| `keyword.weight`        | `keyword_search.weight`         | Share of the keyword score in the ranking                               |
+| `keyword.minScore`      | `keyword_search.min_score`      | Keyword score at which a match counts                                   |
+| `keyword.typoTolerance` | `keyword_search.typo_tolerance` | Match words one typo away                                               |
+
+Each result is one post:
+
+| Field                                   | Meaning                                                                                          |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `id`, `url`, `title`, `date`, `excerpt` | The post. `url` includes the site's `baseurl`                                                    |
+| `data`                                  | `{ tags, categories }` from the front matter                                                     |
+| `passage`                               | Text of the post's best-matching passage (`null` with `store_content: false`)                    |
+| `score`                                 | What results are sorted by: the cosine similarity, or with keyword search on, the combined score |
+| `semantic`                              | Cosine similarity of the passage to the query                                                    |
+| `keyword`                               | Normalised BM25 score of the passage, 0–1 (0 when keyword search is off)                         |
+| `matches`                               | Query words, as typed, found in the passage, e.g. for highlighting                               |
+
+Events are dispatched on `document`:
+
+| Event                      | `detail`                                                    |
+| -------------------------- | ----------------------------------------------------------- |
+| `semantic-search:ready`    | `{ meta }`: the settings read from the index                |
 | `semantic-search:progress` | Transformers.js download progress (`status`, `progress`, …) |
-| `semantic-search:error`    | `{ error }`                                               |
+| `semantic-search:error`    | `{ error }`                                                 |
 
 What happens on a page that includes the tag:
 
@@ -102,7 +149,8 @@ sequenceDiagram
   Runtime-->>Page: semantic-search:ready
   Page->>Runtime: SemanticSearch.search("query")
   Runtime->>Runtime: embed query_prefix + query
-  Runtime->>Runtime: SQL ranks chunks by cosine_similarity
+  Runtime->>Runtime: cosine similarity per passage (SQL)
+  Runtime->>Runtime: BM25 per passage (if keyword_search)
   Runtime-->>Page: one result per post, best passage first
 ```
 
@@ -124,47 +172,111 @@ await SemanticSearch.start({
 
 ## Configuration
 
-Everything is optional. Defaults shown:
+Everything is optional. A typical setup only needs:
+
+```yaml
+semantic_search:
+  min_score: auto        # drop results that are not about the query
+  keyword_search: true   # also catch exact, inflected and misspelt words
+```
+
+All settings with their defaults:
 
 ```yaml
 semantic_search:
   enabled: true
 
-  # Any Transformers.js-compatible feature-extraction model on the Hugging Face
-  # Hub (one with an onnx/ folder, e.g. the Xenova/* conversions).
-  model: Xenova/all-MiniLM-L6-v2
-  dtype: q8              # fp32 | fp16 | q8 | int8 | uint8 | q4 | q4f16 | bnb4
-  pooling: mean          # mean | cls
-  normalize: true
+  # What to index
+  collections: [posts]
+  chunk_size: 150
+  chunk_overlap: 30
+  store_content: true
 
-  # Some models expect instruction prefixes, e.g. e5 ("passage: " / "query: ")
-  # or bge ("" / "Represent this sentence for searching relevant passages: ").
+  # Embedding model
+  model: Xenova/all-MiniLM-L6-v2
+  dtype: q8
+  pooling: mean
+  normalize: true
   document_prefix: ""
   query_prefix: ""
-
-  # Default search threshold (cosine similarity): unset means no filter, a
-  # number in [-1, 1] is used as is, and `auto` calibrates it at build time.
-  min_score:
-
-  # Weight in [0, 1] of case-insensitive exact word matches, added to the
-  # cosine similarity. 0 turns keyword matching off.
-  keyword_weight: 0
-
-  collections: [posts]   # any collections whose documents should be indexed
-  chunk_size: 150        # words per passage; keep within the model's context
-  chunk_overlap: 30      # words shared between consecutive passages
   batch_size: 16
-  store_content: true    # store passage text (enables `passage` in results)
-  cache: true            # reuse embeddings between builds
+  cache: true
 
+  # Relevance
+  min_score:             # unset: no filter; a number in [-1, 1]; or auto
+  keyword_search:        # true, false, or a mapping of these settings:
+    enabled: false
+    weight: 0.3
+    min_score: 0.5
+    stemming: true
+    typo_tolerance: true
+    k1: 1.2
+    b: 0.75
+
+  # Output and browser runtime
   output_dir: assets/semantic-search
   database: index.sqlite3
-
-  # Browser runtime
   transformers_url: https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1
   sql_js_url: https://cdn.jsdelivr.net/npm/sql.js@1.14.2/dist/
-  preload_model: true    # false: download the model on the first search
+  preload_model: true
 ```
+
+### What to index
+
+| Setting         | Default   | Description |
+| --------------- | --------- | ----------- |
+| `enabled`       | `true`    | `false` turns the plugin off: no index is built and `{% semantic_search %}` renders nothing. |
+| `collections`   | `[posts]` | Collections whose documents are indexed, e.g. `[posts, docs]`. Pages outside collections are not indexed. Documents with `published: false` and collections that are not output are skipped. |
+| `chunk_size`    | `150`     | Words per passage. Each passage is embedded and scored on its own, and a post is represented by its best passage, so a long post can match on any one section. Models only read a limited number of tokens (MiniLM: 256, about 190 words), so larger values cut text off. |
+| `chunk_overlap` | `30`      | Words shared by consecutive passages, so a sentence split across a boundary still appears whole in one passage. Must be smaller than `chunk_size`. |
+| `store_content` | `true`    | Store the passage text in the index. Needed for `passage` in results and for keyword search, which then only sees titles. `false` makes the index smaller and keeps the full text out of the downloadable file. |
+
+To leave a single document out of the index, set this in its front matter:
+
+```yaml
+semantic_search: false
+```
+
+### Embedding model
+
+| Setting           | Default                   | Description |
+| ----------------- | ------------------------- | ----------- |
+| `model`           | `Xenova/all-MiniLM-L6-v2` | Any Transformers.js-compatible feature-extraction model on the Hugging Face Hub (one with an `onnx/` folder). The same model embeds posts at build time and queries in the browser. See [Choosing a model](#choosing-a-model). |
+| `dtype`           | `q8`                      | Weight precision: `fp32`, `fp16`, `q8`, `int8`, `uint8`, `q4`, `q4f16` or `bnb4`. Quantised types download faster (`q8` MiniLM: ≈23 MB instead of ≈90 MB) and rank the same in practice. |
+| `pooling`         | `mean`                    | How token vectors become one vector: `mean` or `cls`. Use what the model card says (`cls` for bge, arctic and mxbai). |
+| `normalize`       | `true`                    | Scale vectors to length 1. Leave on: every model listed below is trained for it. |
+| `document_prefix` | `""`                      | Text put before every passage before embedding. Some models need one, e.g. `"passage: "` for e5. |
+| `query_prefix`    | `""`                      | Text put before every query, e.g. `"query: "` for e5. Stored in the index so the browser applies it too. |
+| `batch_size`      | `16`                      | Passages embedded per model call at build time. Affects build speed and memory only. |
+| `cache`           | `true`                    | Reuse embeddings of unchanged passages between builds. See [Build cache](#build-cache). |
+
+Changing `model`, `dtype`, `pooling` or `normalize` re-embeds everything on the
+next build.
+
+### Relevance
+
+| Setting                         | Default | Description |
+| ------------------------------- | ------- | ----------- |
+| `min_score`                     | unset   | Cosine similarity a passage needs to be returned. Unset returns the closest posts whatever their score; `auto` picks a value for your model and site at build time. See [Filtering out irrelevant results](#filtering-out-irrelevant-results). |
+| `keyword_search`                | `false` | `true` turns on [keyword search](#keyword-search) with the defaults below. A mapping turns it on and changes some of them (add `enabled: false` to keep it off). |
+| `keyword_search.weight`         | `0.3`   | Share of the keyword score in the ranking, 0–1. |
+| `keyword_search.min_score`      | `0.5`   | Keyword score, 0–1, at which a keyword match counts. |
+| `keyword_search.stemming`       | `true`  | Reduce English words to their stem so inflected forms match. |
+| `keyword_search.typo_tolerance` | `true`  | Let query words of 5 or more letters match words one typo away. |
+| `keyword_search.k1`             | `1.2`   | BM25 term-frequency saturation. |
+| `keyword_search.b`              | `0.75`  | BM25 length normalisation, 0–1. |
+
+`keyword_search` settings are explained in [Keyword search settings](#keyword-search-settings).
+
+### Output and browser runtime
+
+| Setting            | Default                                                        | Description |
+| ------------------ | -------------------------------------------------------------- | ----------- |
+| `output_dir`       | `assets/semantic-search`                                       | Where in the built site the index and the runtime scripts go. |
+| `database`         | `index.sqlite3`                                                | File name of the index. |
+| `transformers_url` | `https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1` | Where the browser loads Transformers.js from. Point it at a self-hosted copy to avoid the CDN. |
+| `sql_js_url`       | `https://cdn.jsdelivr.net/npm/sql.js@1.14.2/dist/`             | Folder the browser loads `sql-wasm.js` and `sql-wasm.wasm` from. |
+| `preload_model`    | `true`                                                         | Download the model when the page loads. `false` waits for the first search, which saves visitors who never search the download but makes that search slower. |
 
 ### Filtering out irrelevant results
 
@@ -187,94 +299,245 @@ The build then:
 
 1. searches the index for about 35 built-in off-topic queries ("how to file
    taxes", "hello", …) and takes the 90th percentile of their best scores as
-   the noise level. Using a percentile means a few probes that happen to match
-   your blog's topic are ignored;
+   the **noise** level. Using a percentile means a few probes that happen to
+   match your blog's topic are ignored;
 2. searches each post's title against its own post and takes the median as the
-   relevance level;
+   **relevance** level;
 3. sets `min_score` 15% of the way from the noise level to the relevance level.
    Titles also appear in every passage, so they score higher than real queries
    do. That is why the threshold stays close to the noise level.
 
-The build logs the chosen value, and the index's `meta` table stores it along
-with both levels under `min_score_calibration`:
+The build logs the chosen value, and the index's `meta` table stores both
+levels under `calibration`:
 
 ```
 Semantic Search: min_score auto: 0.283 (unrelated queries ≈0.194, post titles ≈0.792)
 ```
 
-Results on the [example site](example/), with a handful of hand-written queries
-about its posts ("how do I make bread rise?", "borrow checker in Rust", …) and
-unrelated ones ("javascript promises", "medieval history of France", "hello", …):
+Values chosen for the sites in [our evaluation](#evaluation):
 
-| Model               | `auto` threshold | Relevant queries scored | Unrelated queries scored |
-| ------------------- | ---------------- | ----------------------- | ------------------------ |
-| `all-MiniLM-L6-v2`  | 0.28             | ≥ 0.37                  | ≤ 0.17                   |
-| `bge-small-en-v1.5` | 0.60             | ≥ 0.61                  | ≤ 0.59                   |
-| `gte-small`         | 0.80             | ≥ 0.84                  | ≤ 0.80                   |
+| Site                                   | `all-MiniLM-L6-v2` | `bge-small-en-v1.5` | `gte-small` |
+| -------------------------------------- | ------------------ | ------------------- | ----------- |
+| [example](example/) (4 posts)          | 0.283              | 0.584               | 0.796       |
+| [mourjo/blog](https://github.com/mourjo/blog) (42 posts) | 0.364 | 0.654           | 0.834       |
+| Jekyll docs (90 pages)                 | 0.286              | 0.620               | 0.817       |
+| opensource.guide (13 guides)           | 0.339              | 0.633               | 0.823       |
 
-In each case, queries about a post scored above the threshold and unrelated
-queries scored below it. Keep in mind:
+Keep in mind:
 
-- The 15% margin was tuned on the example site's four posts, so calibration is
-  a heuristic. With bge and gte the threshold is only about 0.01–0.04 from
-  both relevant and unrelated scores. If it turns out too strict or too loose
-  for your posts, set a number instead.
-- Leaving `min_score` unset filters nothing, as in earlier versions.
+- Calibration is a heuristic. With semantic search alone, it returned nothing
+  for 97% of unrelated queries and returned the right page for 95% of
+  questions about a page. Exact names and rare words fared much worse (62%),
+  which is what keyword search fixes. If the value turns out too strict or
+  too loose for your posts, set a number instead.
+- Leaving `min_score` unset filters nothing.
 - `search()` defaults `minScore` to the value stored in the index, and to −1
   for an index built without one.
 
-### Exact word matches
+### Keyword search
 
-Embedding models know common language well but often score short queries
-and rare terms (names, jargon, ingredients) low, even when the word is right
-there in a post. Searching the example site for "lactic" or "taper" with
-`min_score: auto` finds nothing, although both words appear in a post.
-`keyword_weight` adds a bonus for case-insensitive, whole-word matches:
+Embedding models capture meaning, but they handle names, jargon, rare words
+and very short queries poorly. On [mourjo/blog](https://github.com/mourjo/blog),
+semantic search alone finds nothing for "Gariahat", "Duolingo", "Liliput" or
+"leetcode", although each appears in a post: the model scores these one-word
+queries below `min_score`. Misspellings fare worse. Keyword search adds a
+second scorer, [BM25](https://en.wikipedia.org/wiki/Okapi_BM25), that looks at
+the words themselves:
 
 ```yaml
 semantic_search:
   min_score: auto
-  keyword_weight: 0.3
+  keyword_search: true
 ```
 
-For each passage, `keyword` is the share of the query's words found in the
-passage or its post's title, between 0 and 1. Each word counts by how rare it
-is across passages (BM25's idf), so matching "lactic" counts for much more than
-matching "how" or "the". Words are letters and digits in any script, so
-"Rust" matches "rust" but not "trust", and "tomato" does not match "tomatoes".
-A post's score is its best passage's `semantic + keyword_weight × keyword`,
-and `min_score` applies to that total. An exact match can therefore lift a
-post over the threshold. Off-topic queries share no rare words with your
-posts, so they still fall below it.
+With it, all of those queries find their post. Rankings for ordinary questions
+stay the same as with semantic search alone (see [Evaluation](#evaluation)).
+Keyword search runs entirely in the browser over the passage text already in
+the index, so it adds nothing to the download.
 
-Example site, `all-MiniLM-L6-v2`, `min_score: auto` (0.283). Each cell shows the posts returned, with their scores:
+#### Matching words
 
-| Query                              | `keyword_weight: 0` | `0.15`               | `0.3`                                   |
-| ---------------------------------- | ------------------- | -------------------- | --------------------------------------- |
-| dutch oven                         | —                   | sourdough 0.34       | sourdough 0.49                          |
-| lactic                             | —                   | sourdough 0.29       | sourdough 0.44                          |
-| suckers                            | —                   | —                    | tomatoes 0.31                           |
-| taper                              | —                   | —                    | marathon 0.41                           |
-| water                              | —                   | —                    | tomatoes 0.39, sourdough 0.31           |
-| how do I make bread rise?          | sourdough 0.58      | sourdough 0.59       | sourdough 0.61                          |
-| what should I eat before a race?   | marathon 0.37       | marathon 0.42        | marathon 0.46                           |
-| javascript promises, hello, …      | —                   | —                    | —                                       |
-| rust on garden tools               | rust 0.33           | rust 0.36            | rust 0.38                               |
+Passages (with their post's title) and queries are split into words the same
+way:
 
-At 0.3, every word that appears in a post finds it, and questions keep the
-same ranking. Unrelated queries still return nothing. The weight also has a cost: a word can
-mean something else ("rust" on garden tools), so an exact match can rank a post
-higher than its meaning deserves. In this example the meaning-based score
-already passed the threshold without the bonus. Keyword scoring runs in the
-browser on the stored passage text, so with `store_content: false` it matches
-titles only. The first keyword search counts word frequencies across the
-index, which takes a moment on very large sites.
+1. **Words** are runs of letters, digits and combining marks in any script, so
+   "Rust's borrow-checker" becomes `rust`, `s`, `borrow`, `checker`, and
+   Bengali or Devanagari words stay whole. Matching ignores case.
+2. **Accents** on Latin letters are removed: "café" matches "cafe".
+3. **Stemming** (`stemming: true`) reduces English words to their stem with the
+   [Porter stemmer](https://tartarus.org/martin/PorterStemmer/), so "tomatoes"
+   matches "tomato" and "running" matches "run". Words in other scripts are
+   left as they are.
+4. **Typo tolerance** (`typo_tolerance: true`): a query word of 5 or more
+   letters that appears nowhere on the site matches words one edit away: one
+   letter added, removed, changed, or two neighbouring letters swapped. So
+   "Innsbruk" matches "Innsbruck". Such a match is worth 80% of the exact
+   word's BM25 score (before the cap described below). Words that do appear
+   on the site match only themselves, so "trust" never matches "rust".
 
-To leave a single document out of the index, set this in its front matter:
+#### Scoring a passage with BM25
 
-```yaml
-semantic_search: false
+For each query word, BM25 rewards passages that contain it, especially when:
+
+- the word is **rare** across passages (its inverse document frequency, idf):
+  "lactic" says more than "water";
+- it appears **several times**, with diminishing returns set by `k1`;
+- the passage is **short**, which `b` accounts for: one mention in a short
+  passage counts for more than in a long one.
+
+For a word with term frequency `tf` in a passage of `len` words, where passages
+average `avg` words:
+
 ```
+bm25 = idf · tf · (k1 + 1) / (tf + k1 · (1 − b + b · len / avg))
+idf  = ln(1 + (N − df + 0.5) / (df + 0.5))     N passages, df of them contain the word
+```
+
+#### Normalising the keyword score
+
+Raw BM25 scores have no upper bound and depend on the site, so they cannot be
+mixed with cosine similarities or compared with a fixed threshold as they are.
+The plugin rescales them:
+
+1. Each query word's BM25 score is divided by that of a word found in exactly
+   one passage, once, in a passage of average length. This is the strongest
+   evidence a single mention can give, so it maps to 1. Scores above 1 (more
+   mentions, shorter passage) are capped at 1, so one word cannot make up for
+   another that is missing.
+2. The passage's `keyword` score is the mean over the query's words.
+
+The result is between 0 and 1 and means the same thing on any site. Measured on
+[mourjo/blog](https://github.com/mourjo/blog) (268 passages):
+
+| Query                                              | Passages containing it | Best `keyword` | Typical `keyword` |
+| -------------------------------------------------- | ---------------------- | -------------- | ----------------- |
+| "Lauterbrunnen"                                    | 2                      | 1.00           | 1.00              |
+| "Lauterbrunnen Alps"                               | 4                      | 1.00           |                   |
+| "Lauterbrunnen xyzzyq" (second word is nowhere)    | 2                      | 0.50           | 0.50              |
+| "Innsbruk" (typo of Innsbruck)                     | 5                      | 0.83           |                   |
+| "water"                                            | 5                      | 0.75           |                   |
+| "family"                                           | 22                     | 0.80           | 0.48              |
+| "time"                                             | 86                     | 0.40           | 0.22              |
+| "the"                                              | 267                    | 0.00           | 0.00              |
+
+Rare and specific words produce scores near 1. The more passages a word
+appears in, the less it scores, and words that do not appear on the site add
+nothing.
+
+#### Normalising the semantic score
+
+Cosine similarities live on a different scale for every model: unrelated
+text scores about 0.1 with MiniLM but 0.75 with gte-small, so a raw cosine
+cannot be added to a keyword score. The build already measures the model's
+noise and relevance levels (see [Filtering out irrelevant results](#filtering-out-irrelevant-results)),
+and the browser uses them to rescale:
+
+```
+semantic' = max(0, (cosine − noise) / (relevance − noise))
+```
+
+0 means "as close as unrelated queries get" and 1 means "as close as a post's
+own title", whatever the model. Stronger matches go above 1 rather than being
+capped, so they keep their order. This is why the same keyword settings
+behave alike with MiniLM, bge and gte in our evaluation. Calibration runs
+whenever keyword search is on, even when `min_score` is a number or unset.
+
+#### Combining the two
+
+For each passage:
+
+1. **Filter.** The passage is a candidate if its cosine similarity reaches
+   `min_score`, *or* its keyword score reaches `keyword_search.min_score`.
+   Either scorer can find a post the other misses.
+2. **Rank.**
+
+   ```
+   score = (1 − weight) · semantic' + weight · keyword
+   ```
+
+   Here `keyword` counts only when it reaches `keyword_search.min_score`;
+   below that it is treated as 0. Long questions share some everyday words
+   ("the", "site", "error") with many pages, and those small overlaps would
+   otherwise reorder results that the embeddings rank well.
+3. **Group.** Each post keeps its highest-scoring passage, and posts are
+   sorted by that score.
+
+With keyword search off, the score is the cosine similarity, as before.
+
+#### Keyword search settings
+
+- **`weight`** (0.3) is the share of the keyword score in the ranking. It
+  matters when both scorers like different posts. 0 lets keyword search find
+  posts without reordering them; 1 ranks by keywords alone among the
+  candidates. In our evaluation every value from 0.2 to 0.5 gave the same
+  results within a percentage point, so there is rarely a reason to change it.
+- **`min_score`** (0.5) is the keyword score at which a match counts, both for
+  returning a post and for ranking it. It is the main setting:
+
+  | `min_score` | Exact terms found | Inflected forms | Typos | Unrelated queries returning nothing |
+  | ----------- | ----------------- | --------------- | ----- | ----------------------------------- |
+  | 0.4         | 100%              | 100%            | 100%  | 79%                                 |
+  | **0.5**     | 98%               | 100%            | 95%   | 89%                                 |
+  | 0.6         | 98%               | 100%            | 87%   | 90%                                 |
+
+  Lower values also accept partial matches, such as one rare word of a
+  two-word query. Higher values need closer matches and give up typos first,
+  because a typo match is worth 80% of an exact one.
+- **`stemming`** (true) suits English sites. For other languages it does no
+  harm, as only ASCII words are stemmed, but it does not help either. Turn it
+  off if inflected forms should not match.
+- **`typo_tolerance`** (true) can be turned off if near-misses surprise your
+  readers, for example on a site full of short product codes.
+- **`k1`** (1.2) and **`b`** (0.75) are the standard BM25 parameters. Raise
+  `k1` to reward repeated words more; lower `b` toward 0 to stop favouring
+  short passages. The defaults are the usual choice, and passages are already
+  of similar length, so these rarely need changing.
+
+#### Limits
+
+- **Common words cannot single out a page.** A misspelt "colections" on
+  Jekyll's documentation, where "collection" appears on dozens of pages, is
+  recognised but scores below `min_score`. So does a phrase made only of
+  common words, such as "good first issue". Semantic search still handles
+  these when the meaning is clear.
+- **A word may mean something else.** "rust on garden tools" matches a post
+  about the Rust language through the word "rust". Keyword matches are
+  literal, so "hello" finds the page with a "Hello, world" example.
+- **Stemming is English-only.** Other languages get exact, accent-folded and
+  typo matching.
+- **No phrase matching.** Words are matched independently, in any order.
+- **The keyword index is built on page load.** With keyword search on, the
+  browser builds it from the passage text when the index loads: about 30 ms
+  for 270 passages and 50 ms for 560 on a laptop. A search then takes well
+  under a millisecond.
+
+#### Evaluation
+
+We measured search quality on four sites with labelled queries and three
+models (`all-MiniLM-L6-v2`, `bge-small-en-v1.5` with `cls` pooling, and
+`gte-small`), all with `min_score: auto`. Queries come in five kinds:
+questions phrased differently from the page, exact names and rare terms,
+inflected forms, typos, and unrelated queries that should return nothing. The
+queries are in [`eval/queries`](eval/queries); see
+[Measuring search quality](#measuring-search-quality) to run them.
+
+Results with semantic search alone → with `keyword_search: true`, averaged over
+the three models. "Questions" counts the right page ranked first; the other
+columns count the right page returned at all:
+
+| Site                                                       | Pages | Questions   | Exact terms  | Inflected forms | Typos       | Unrelated → nothing |
+| ---------------------------------------------------------- | ----- | ----------- | ------------ | --------------- | ----------- | ------------------- |
+| [example](example/)                                        | 4     | 100% → 100% | 33% → 100%   | 50% → 100%      | 50% → 100%  | 100% → 100%         |
+| [mourjo/blog](https://github.com/mourjo/blog)              | 42    | 92% → 92%   | 54% → 100%   | 83% → 100%      | 17% → 100%  | 92% → 81%           |
+| [Jekyll docs](https://github.com/jekyll/jekyll/tree/master/docs/_docs) | 90 | 54% → 54% | 80% → 100% | 100% → 100% | 50% → 83% | 100% → 88% |
+| [opensource.guide](https://github.com/github/opensource.guide) | 13 | 94% → 94%   | 61% → 92%    | 92% → 100%      | 27% → 100%  | 100% → 100%         |
+| **All**                                                    |       | **81% → 81%** | **62% → 98%** | **87% → 100%** | **32% → 95%** | **97% → 89%**     |
+
+Ranking for questions is unchanged on every site and model, while names, rare
+words, inflections and typos are found almost every time. The unrelated
+queries that now return something do so through words that really are on the
+page: "hello" finds pages with "Hello, world" examples, and "quantum computing
+qubits" finds a reading list linking to quantum computing articles.
 
 ### Choosing a model
 
@@ -347,7 +610,7 @@ only embeds passages that changed. Delete the file to start fresh.
 erDiagram
   documents ||--|{ chunks : "split into"
   meta {
-    TEXT key PK "model, dtype, pooling, normalize, query_prefix, min_score, keyword_weight, dimensions, schema_version"
+    TEXT key PK "model, dtype, pooling, normalize, query_prefix, min_score, calibration, keyword_search, dimensions, schema_version, plugin_version"
     TEXT value "JSON-encoded"
   }
   documents {
@@ -370,8 +633,7 @@ erDiagram
 Embeddings are little-endian float32 blobs, the same layout
 [sqlite-vec](https://github.com/asg017/sqlite-vec) uses. The browser runtime
 registers a `cosine_similarity(a, b)` SQL function, so you can write your own
-queries against the database. It also registers `keyword_score(chunk_id)`, which
-returns the keyword score for the current search's query; outside a keyword search it returns 0.
+queries against the database.
 
 ## Development
 
@@ -382,6 +644,36 @@ npm install
 npm test                  # browser-runtime tests on Node 20+, incl. an end-to-end
                           # search over an index built by the Ruby side
 npm run test:models       # real models: build vs browser vectors (downloads several GB)
+```
+
+### Measuring search quality
+
+[`eval/`](eval/) measures search quality on real sites with labelled queries,
+using the browser's search code and a real model. It produced the numbers in
+[Evaluation](#evaluation).
+
+```sh
+# 1. Build an index: either build a Jekyll site with the plugin, or index a
+#    folder (or glob) of Markdown files directly
+bundle exec ruby -Ilib eval/build_index.rb path/to/_posts tmp/eval/site.sqlite3 \
+  '{"model": "Xenova/bge-small-en-v1.5", "pooling": "cls"}'
+
+# 2. Score it against a query set
+node eval/run.mjs tmp/eval/site.sqlite3 eval/queries/mourjo-blog.json
+node eval/run.mjs tmp/eval/site.sqlite3 eval/queries/mourjo-blog.json --sweep   # try other settings
+node eval/run.mjs tmp/eval/site.sqlite3 eval/queries/mourjo-blog.json --diff    # queries whose top result changes
+```
+
+A query set lists queries with their kind and answer. `expect` gives URL
+fragments of the right pages; `term` accepts every page containing that word,
+which suits name, inflection and typo queries:
+
+```json
+{ "queries": [
+  { "kind": "paraphrase", "q": "feeling small in front of huge mountains", "expect": ["being-tiny"] },
+  { "kind": "typo", "q": "Lauterbrunen", "term": "lauterbrunnen" },
+  { "kind": "unrelated", "q": "chocolate cake recipe" }
+] }
 ```
 
 To try it with a real model:
@@ -397,6 +689,7 @@ Layout:
 ```
 lib/jekyll/semantic_search/
   configuration.rb      settings and validation
+  min_score_calibrator.rb noise and relevance levels, min_score: auto
   text_extractor.rb     rendered HTML → plain text
   chunker.rb            overlapping word windows
   informers_embedder.rb build-time model (informers / ONNX Runtime)
@@ -407,8 +700,13 @@ lib/jekyll/semantic_search/
   generator.rb          registers files; pluggable embedder factory
   tag.rb                {% semantic_search %}
 assets/semantic-search/
-  search-core.js        sql.js search logic (environment-independent)
+  search-core.js        search and score combination (environment-independent)
+  keyword-search.js     BM25, tokenizer, Porter stemmer, typo matching
   semantic-search.js    browser entry point
+eval/
+  build_index.rb        index a folder of Markdown files
+  run.mjs               score an index against labelled queries
+  queries/              query sets for four sites
 ```
 
 Custom build-time embedders can be plugged in from a site plugin. The object

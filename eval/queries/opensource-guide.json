@@ -1,0 +1,53 @@
+{
+  "description": "github.com/github/opensource.guide _articles: 13 long English guides about running open source projects",
+  "queries": [
+    { "kind": "paraphrase", "q": "how do I find my first project to help with", "expect": ["how-to-contribute"] },
+    { "kind": "paraphrase", "q": "making money from my open source work", "expect": ["getting-paid"] },
+    { "kind": "paraphrase", "q": "picking a license for my code", "expect": ["legal", "starting-a-project"] },
+    { "kind": "paraphrase", "q": "dealing with burnout as a maintainer", "expect": ["maintaining-balance", "best-practices"] },
+    { "kind": "paraphrase", "q": "rules for how people should behave in the community", "expect": ["code-of-conduct"] },
+    { "kind": "paraphrase", "q": "measuring whether my project is successful", "expect": ["metrics"] },
+    { "kind": "paraphrase", "q": "getting people to know about my project", "expect": ["finding-users"] },
+    { "kind": "paraphrase", "q": "who makes decisions in a project", "expect": ["leadership-and-governance"] },
+    { "kind": "paraphrase", "q": "protecting my project from vulnerabilities", "expect": ["security-best-practices"] },
+    { "kind": "paraphrase", "q": "making the project usable for people with disabilities", "expect": ["accessibility"] },
+    { "kind": "paraphrase", "q": "saying no to feature requests", "expect": ["best-practices"] },
+    { "kind": "paraphrase", "q": "making newcomers feel welcome", "expect": ["building-community", "how-to-contribute"] },
+
+    { "kind": "exact", "q": "Contributor Covenant", "term": "covenant" },
+    { "kind": "exact", "q": "Open Collective", "term": "collective" },
+    { "kind": "exact", "q": "GitHub Sponsors", "term": "sponsors" },
+    { "kind": "exact", "q": "Patreon", "term": "patreon" },
+    { "kind": "exact", "q": "Dependabot", "term": "dependabot" },
+    { "kind": "exact", "q": "WCAG", "term": "wcag" },
+    { "kind": "exact", "q": "screen reader", "term": "screen" },
+    { "kind": "exact", "q": "CLA", "term": "cla" },
+    { "kind": "exact", "q": "BDFL", "term": "bdfl" },
+    { "kind": "exact", "q": "SBOM", "term": "sbom" },
+    { "kind": "exact", "q": "Libraries.io", "term": "libraries" },
+    { "kind": "exact", "q": "good first issue", "term": "good first issue" },
+    { "kind": "exact", "q": "multi-factor authentication", "term": "multi-factor" },
+    { "kind": "exact", "q": "CodeTriage", "term": "codetriage" },
+    { "kind": "exact", "q": "trademark", "term": "trademark" },
+    { "kind": "exact", "q": "Linux Foundation", "term": "linux foundation" },
+    { "kind": "exact", "q": "DCO", "term": "dco" },
+
+    { "kind": "inflection", "q": "sponsorship", "term": "sponsors" },
+    { "kind": "inflection", "q": "governing", "term": "governance" },
+    { "kind": "inflection", "q": "licensing", "term": "license" },
+    { "kind": "inflection", "q": "contributing guidelines", "term": "contributing" },
+
+    { "kind": "typo", "q": "Dependabto", "term": "dependabot" },
+    { "kind": "typo", "q": "covenent", "term": "covenant" },
+    { "kind": "typo", "q": "acessibility", "term": "accessibility" },
+    { "kind": "typo", "q": "goverance", "term": "governance" },
+    { "kind": "typo", "q": "kickstartr", "term": "kickstarter" },
+
+    { "kind": "unrelated", "q": "chocolate cake recipe" },
+    { "kind": "unrelated", "q": "how to train for a marathon" },
+    { "kind": "unrelated", "q": "the french revolution" },
+    { "kind": "unrelated", "q": "growing tomatoes on a balcony" },
+    { "kind": "unrelated", "q": "symptoms of the flu" },
+    { "kind": "unrelated", "q": "hello" }
+  ]
+}

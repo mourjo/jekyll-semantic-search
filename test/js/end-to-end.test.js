@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import initSqlJs from "sql.js";
 
-import { createKeywordScorer, createSearcher, words } from "../../assets/semantic-search/search-core.js";
+import { createSearcher, semanticScale } from "../../assets/semantic-search/search-core.js";
 import { DIMENSIONS, hashingVector } from "./support/hashing-embedder.js";
 
 let searcher;
@@ -37,7 +37,7 @@ test("exposes the metadata written at build time", () => {
   assert.equal(searcher.meta.dimensions, DIMENSIONS);
   assert.equal(searcher.meta.query_prefix, "query: ");
   assert.equal(searcher.meta.min_score, null);
-  assert.equal(searcher.meta.keyword_weight, 0);
+  assert.equal(searcher.meta.keyword_search.enabled, false);
 });
 
 test("ranks the most similar post first and returns its best passage", async () => {
@@ -87,58 +87,104 @@ test("defaults minScore to the threshold stored in the index", async () => {
   assert.equal((await strict.search("tomatoes", { minScore: -1 })).length, 3);
 });
 
-test("words are lowercased letters and digits in any script", () => {
-  assert.deepEqual(words("Rust's Borrow-Checker, 2024! Ünïcode"), ["rust", "s", "borrow", "checker", "2024", "ünïcode"]);
-});
-
-function passageId(db, content) {
-  return db.exec("SELECT id FROM chunks WHERE content = ?", [content])[0].values[0][0];
+function searcherWithMeta(updates) {
+  const db = new SQL.Database(databaseBytes);
+  for (const [key, value] of Object.entries(updates)) {
+    db.run("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", [key, JSON.stringify(value)]);
+  }
+  return createSearcher({ db, embed: async (text) => hashingVector(text) });
 }
 
-test("keyword scores match whole words case-insensitively, including titles", () => {
-  const db = new SQL.Database(databaseBytes);
-  const score = createKeywordScorer(db);
-  const rust = passageId(db, "The borrow checker enforces ownership at compile time");
-  const garden = passageId(db, "Tomatoes need sun water and support stakes");
-
-  assert.equal(score("BORROW Checker")(rust), 1);
-  assert.equal(score("borrow")(garden), 0);
-  assert.equal(score("tomato")(garden), 0, "whole words only");
-  assert.equal(score("growing")(garden), 1, "title words count");
+test("semanticScale maps the calibrated levels to 0 and 1", () => {
+  const scale = semanticScale({ noise: 0.2, relevance: 0.8 });
+  close(scale(0.2), 0);
+  close(scale(0.5), 0.5);
+  close(scale(0.8), 1);
+  close(scale(0.95), 1.25, "not capped, so strong matches keep their order");
+  close(scale(-0.3), 0);
+  close(semanticScale({ noise: 0.2, relevance: null })(0.6), 0.5, "without titles, 1 is the top");
+  close(semanticScale(undefined)(0.42), 0.42, "uncalibrated indexes keep the cosine");
 });
 
-test("rare words outweigh common ones", () => {
-  const db = new SQL.Database(databaseBytes);
-  const score = createKeywordScorer(db)("flour water");
-  const bread = passageId(db, "Feed the sourdough starter with flour and water");
-  const garden = passageId(db, "Tomatoes need sun water and support stakes");
+function close(actual, expected, message = "") {
+  assert.ok(Math.abs(actual - expected) < 1e-9, `${message} expected ${expected}, got ${actual}`);
+}
 
-  assert.equal(score(bread), 1);
-  assert.ok(score(garden) > 0 && score(garden) < 0.5, `garden ${score(garden)}`);
-});
-
-test("keyword matching is off unless a weight is set", async () => {
-  const results = await searcher.search("borrow checker", { minScore: -1 });
-  for (const r of results) {
-    assert.equal(r.keyword, 0);
+test("without keyword search, scores are cosine similarities", async () => {
+  for (const r of await searcher.search("borrow checker")) {
     assert.equal(r.score, r.semantic);
+    assert.equal(r.keyword, 0);
+    assert.deepEqual(r.matches, []);
   }
 });
 
-test("keywordWeight adds the weighted keyword score", async () => {
-  const [top] = await searcher.search("Borrow checker", { keywordWeight: 0.5 });
-  assert.equal(top.url, "/rust/");
-  assert.equal(top.keyword, 1);
-  assert.ok(Math.abs(top.score - (top.semantic + 0.5)) < 1e-9, `score ${top.score}`);
+test("keyword search combines both scores and reports matches", async () => {
+  const results = await searcher.search("Borrow checker", { keyword: { enabled: true, weight: 0.4 } });
+  const rust = results.find((r) => r.url === "/rust/");
+  assert.equal(results[0].url, "/rust/");
+  assert.deepEqual(rust.matches, ["borrow", "checker"]);
+  assert.ok(rust.keyword > 0 && rust.keyword <= 1, `keyword ${rust.keyword}`);
+  // The fixture index is not calibrated, so the semantic part is the cosine itself.
+  assert.ok(rust.keyword >= 0.5);
+  close(rust.score, 0.6 * rust.semantic + 0.4 * rust.keyword);
+  for (const r of results.filter((r) => r.url !== "/rust/")) assert.equal(r.keyword, 0);
 });
 
-test("keyword_weight in the index is the default, and exact matches can clear minScore", async () => {
-  const rust = (await searcher.search("borrow")).find((r) => r.url === "/rust/");
-  const db = new SQL.Database(databaseBytes);
-  db.run("UPDATE meta SET value = '0.3' WHERE key = 'keyword_weight'");
-  const weighted = createSearcher({ db, embed: async (text) => hashingVector(text) });
-  const minScore = rust.semantic + 0.1;
+test("a keyword match returns a post the semantic threshold filters out", async () => {
+  const minScore = 0.99;
+  assert.deepEqual(await searcher.search("borrow", { minScore }), []);
 
-  assert.ok(!(await searcher.search("borrow", { minScore })).some((r) => r.url === "/rust/"));
-  assert.equal((await weighted.search("borrow", { minScore }))[0].url, "/rust/");
+  const hits = await searcher.search("borrow", { minScore, keyword: { enabled: true } });
+  assert.deepEqual(hits.map((r) => r.url), ["/rust/"]);
+  assert.ok(hits[0].semantic < minScore && hits[0].keyword >= 0.5);
+});
+
+test("keyword matches below keyword.minScore neither return a post nor change its score", async () => {
+  const strict = await searcher.search("borrow", { minScore: 0.99, keyword: { enabled: true, minScore: 1.01 } });
+  assert.deepEqual(strict, []);
+
+  const results = await searcher.search("borrow checker", { minScore: -1, keyword: { enabled: true, minScore: 1.01 } });
+  const rust = results.find((r) => r.url === "/rust/");
+  assert.ok(rust.keyword > 0, "the keyword score is still reported");
+  close(rust.score, 0.7 * rust.semantic);
+});
+
+test("near matches: stems and typos", async () => {
+  const keyword = { enabled: true };
+  const [stem] = await searcher.search("tomato stake", { minScore: 0.99, keyword });
+  assert.equal(stem.url, "/garden/");
+  assert.deepEqual(stem.matches, ["tomato", "stake"]);
+
+  const [typo] = await searcher.search("sourdouhg", { minScore: 0.99, keyword: { ...keyword, minScore: 0.1 } });
+  assert.equal(typo.url, "/bread/");
+  const none = await searcher.search("sourdouhg", { minScore: 0.99, keyword: { ...keyword, typoTolerance: false } });
+  assert.deepEqual(none, []);
+});
+
+test("keyword settings and calibration stored in the index are the defaults", async () => {
+  const configured = searcherWithMeta({
+    keyword_search: { enabled: true, weight: 0.5, min_score: 0.5, stemming: true, typo_tolerance: true, k1: 1.2, b: 0.75 },
+    calibration: { noise: 0.1, relevance: 0.6 },
+    min_score: 0.99,
+  });
+  const [rust] = await configured.search("borrow");
+  assert.equal(rust.url, "/rust/");
+  assert.ok(rust.keyword >= 0.5);
+  close(rust.score, 0.5 * Math.max(0, (rust.semantic - 0.1) / 0.5) + 0.5 * rust.keyword);
+
+  const disabled = await configured.search("borrow", { keyword: { enabled: false } });
+  assert.deepEqual(disabled, [], "options override the stored settings");
+});
+
+test("keyword search without stemming needs the exact word", async () => {
+  const unstemmed = searcherWithMeta({ keyword_search: { enabled: true, stemming: false }, min_score: 0.99 });
+  assert.deepEqual(await unstemmed.search("tomato"), []);
+  assert.equal((await unstemmed.search("tomatoes"))[0].url, "/garden/");
+});
+
+test("each post appears once, with its best passage", async () => {
+  const results = await searcher.search("loaf oven sourdough", { minScore: -1, keyword: { enabled: true } });
+  assert.equal(new Set(results.map((r) => r.url)).size, results.length);
+  const bread = results.find((r) => r.url === "/bread/");
+  assert.equal(bread.passage, "Bake the loaf in a hot dutch oven");
 });

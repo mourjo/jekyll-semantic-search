@@ -1,0 +1,21 @@
+{
+  "description": "This repository's example/ site: 4 short posts",
+  "queries": [
+    { "kind": "paraphrase", "q": "how do I make bread rise?", "expect": ["sourdough"] },
+    { "kind": "paraphrase", "q": "memory safety without garbage collection", "expect": ["rust"] },
+    { "kind": "paraphrase", "q": "growing vegetables in summer", "expect": ["tomatoes"] },
+    { "kind": "paraphrase", "q": "what should I eat before a race?", "expect": ["marathon"] },
+    { "kind": "exact", "q": "lactic", "term": "lactic" },
+    { "kind": "exact", "q": "dutch oven", "term": "dutch" },
+    { "kind": "exact", "q": "suckers", "term": "suckers" },
+    { "kind": "exact", "q": "taper", "term": "taper" },
+    { "kind": "inflection", "q": "tomato", "term": "tomatoes" },
+    { "kind": "inflection", "q": "proofing", "term": "proof" },
+    { "kind": "typo", "q": "sourdouhg", "term": "sourdough" },
+    { "kind": "typo", "q": "fermantation", "term": "fermentation" },
+    { "kind": "unrelated", "q": "javascript promises" },
+    { "kind": "unrelated", "q": "medieval history of France" },
+    { "kind": "unrelated", "q": "how to fix a flat bicycle tyre" },
+    { "kind": "unrelated", "q": "hello" }
+  ]
+}
